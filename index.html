@@ -386,7 +386,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.21';
+const VERSION = '1.6.22';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -690,10 +690,49 @@ const PRODUCT_SOURCES = [
   { name: 'Open Beauty Facts', base: () => 'https://world.openbeautyfacts.org' },
 ];
 
+/* A product_name like "63% fat spread with buttermilk" is a description, not a name.
+   Treat long lowercase / numeric strings as descriptions so we can fall back to the brand. */
+function looksLikeDescription(s) {
+  if (!s) return false;
+  const t = String(s).trim();
+  if (!t) return false;
+  const words = t.split(/\s+/).length;
+  const lower = t === t.toLowerCase();
+  const numeric = /^\d/.test(t) || /%/.test(t);
+  return words >= 3 && (lower || numeric);
+}
+
+function pickProductName(p) {
+  const brand = (p.brands || '').split(',')[0].trim();
+  const candidates = [
+    p.product_name,
+    p.abbreviated_product_name,
+    p.generic_name,
+    p.product_name_en,
+    p.generic_name_en,
+    p.product_name_uk,
+    p.product_name_fr
+  ].map(x => (x || '').trim()).filter(Boolean);
+  let name = candidates[0] || '';
+  if (!name || looksLikeDescription(name)) {
+    name = brand || candidates.find(c => !looksLikeDescription(c)) || name;
+  }
+  return { name, brand };
+}
+
+function brandLine(obj) {
+  const b = (obj.brand || '').trim();
+  const n = (obj.name || '').trim();
+  return (b && b.toLowerCase() !== n.toLowerCase()) ? b : '';
+}
+
 async function lookupProduct(barcode) {
   // Check local cache first (remembers user-edited names)
   const cached = getCachedProduct(barcode);
-  if (cached && cached.name) return { barcode, name: cached.name, brand: cached.brand || '', image: cached.image || '' };
+  // Ignore cached names that are descriptions (they get re-fetched and fixed)
+  if (cached && cached.name && !looksLikeDescription(cached.name)) {
+    return { barcode, name: cached.name, brand: cached.brand || '', image: cached.image || '' };
+  }
 
   const country = S.offCountry === 'world' ? 'world' : S.offCountry;
   for (const src of PRODUCT_SOURCES) {
@@ -703,12 +742,12 @@ async function lookupProduct(barcode) {
       const data = await r.json();
       if (data.status === 1 && data.product) {
         const p = data.product;
-        const name = p.product_name || p.product_name_en || p.generic_name || p.product_name_fr || '';
-        if (name.trim()) {
+        const picked = pickProductName(p);
+        if (picked.name) {
           const res = {
             barcode,
-            name: name.trim(),
-            brand: (p.brands || '').split(',')[0].trim(),
+            name: picked.name,
+            brand: picked.brand,
             image: p.image_small_url || p.image_front_small_url || p.image_url || p.image_thumb_url || ''
           };
           setCachedProduct(barcode, res);
@@ -733,6 +772,8 @@ async function lookupProduct(barcode) {
       return res;
     }
   } catch(e) {}
+  // If every lookup failed, fall back to a cached name (even a description) if present
+  if (cached && cached.name) return { barcode, name: cached.name, brand: cached.brand || '', image: cached.image || '' };
   return { barcode, name: `Unknown product (${barcode})`, brand: '', image: '' };
 }
 
@@ -786,7 +827,7 @@ async function onScanSuccess(decodedText) {
   qty = 1;
   $('qtyVal').textContent = '1';
   $('resName').value = currentProduct.name;
-  $('resBrand').textContent = currentProduct.brand || '';
+  $('resBrand').textContent = brandLine(currentProduct);
   $('resBarcode').textContent = currentProduct.barcode;
   const img = $('resImg');
   if (currentProduct.image) { img.src = currentProduct.image; img.style.display = ''; }
@@ -1092,7 +1133,7 @@ $('btnLookupManual').addEventListener('click', async () => {
   currentProduct = r;
   qty = 1; $('qtyVal').textContent = '1';
   $('resName').value = r.name;
-  $('resBrand').textContent = r.brand || '';
+  $('resBrand').textContent = brandLine(r);
   $('resBarcode').textContent = r.barcode;
   const img = $('resImg');
   if (r.image) { img.src = r.image; img.style.display = ''; }
