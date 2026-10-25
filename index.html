@@ -156,7 +156,7 @@
 </head>
 <body>
 <header>
-  <h1>🛒 Food Scanner</h1>
+  <h1>🛒 Food Scanner <span id="versionLabel" style="font-size:11px;color:var(--muted);font-weight:400"></span></h1>
   <div class="actions">
     <button class="icon-btn" id="btnManual" title="Manual entry">⌨️</button>
     <button class="icon-btn" id="btnHistory" title="History">📋</button>
@@ -335,6 +335,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
+const VERSION = '1.4.0';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -762,6 +763,8 @@ $('qrGenOverlay').addEventListener('click', e => { if (e.target === $('qrGenOver
 
 /* ---------- Init ---------- */
 window.addEventListener('load', async () => {
+  const vl = document.getElementById('versionLabel');
+  if (vl) vl.textContent = 'v' + VERSION;
   loadSettingsUI();
   updateStatusFromSettings();
   await startScanner();
