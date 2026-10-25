@@ -72,6 +72,12 @@
   .status-bar .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); }
   .status-bar .dot.ok { background:var(--accent); }
   .status-bar .dot.err { background:var(--danger); }
+  .status-bar .list-btn {
+    margin-left:auto; background:var(--panel2); border:1px solid var(--border);
+    color:var(--text); border-radius:8px; padding:4px 10px; font-size:12px; cursor:pointer;
+    white-space:nowrap; max-width:45%; overflow:hidden; text-overflow:ellipsis;
+  }
+  .status-bar .list-btn:active { transform:scale(.96); }
 
   /* Result card */
   .card-overlay {
@@ -178,6 +184,7 @@
 <div class="status-bar">
   <span class="dot" id="statusDot"></span>
   <span id="statusText">Starting camera…</span>
+  <button class="list-btn" id="btnList" title="Switch list">List 1</button>
 </div>
 
 <!-- Result card -->
@@ -226,9 +233,14 @@
       </select>
     </div>
     <div class="field" id="entityField">
-      <label>Todo entity ID</label>
+      <label>List 1 todo entity ID</label>
       <input id="haEntity" placeholder="todo.shopping_list" />
       <div class="hint">Find in Developer Tools → States (todo.*).</div>
+    </div>
+    <div class="field" id="entityField2">
+      <label>List 2 todo entity ID (optional)</label>
+      <input id="haEntity2" placeholder="todo.groceries" />
+      <div class="hint">Leave empty to use only one list. Switch lists with the button next to the status bar.</div>
     </div>
     <div class="field">
       <label>Open Food Facts country</label>
@@ -356,12 +368,14 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.16';
+const VERSION = '1.6.17';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
   listType: localStorage.getItem('listType') || 'todo',
   haEntity: localStorage.getItem('haEntity') || 'todo.shopping_list',
+  haEntity2: localStorage.getItem('haEntity2') || '',
+  activeList: localStorage.getItem('activeList') || '1',
   offCountry: localStorage.getItem('offCountry') || 'world',
   qtyInName: localStorage.getItem('qtyInName') !== 'false',
   vibrate: localStorage.getItem('vibrate') !== 'false',
@@ -422,6 +436,7 @@ function loadSettingsUI() {
   $('haToken').value = S.haToken;
   $('listType').value = S.listType;
   $('haEntity').value = S.haEntity;
+  $('haEntity2').value = S.haEntity2;
   $('offCountry').value = S.offCountry;
   $('ghToken').value = S.ghToken;
   $('ghRepo').value = S.ghRepo;
@@ -434,7 +449,9 @@ function setSwitch(id, on) {
   $(id).classList.toggle('on', on);
 }
 function toggleEntityField() {
-  $('entityField').style.display = $('listType').value === 'todo' ? '' : 'none';
+  const show = $('listType').value === 'todo' ? '' : 'none';
+  $('entityField').style.display = show;
+  $('entityField2').style.display = show;
 }
 $('listType').addEventListener('change', toggleEntityField);
 ['qtyInName','vibrate','beep'].forEach(id => {
@@ -477,6 +494,8 @@ $('btnSaveSettings').addEventListener('click', () => {
   S.haToken = $('haToken').value.trim();
   S.listType = $('listType').value;
   S.haEntity = $('haEntity').value.trim() || 'todo.shopping_list';
+  S.haEntity2 = $('haEntity2').value.trim();
+  if (S.activeList === '2' && !S.haEntity2) S.activeList = '1';
   S.offCountry = $('offCountry').value;
   S.ghToken = $('ghToken').value.trim();
   S.ghRepo = $('ghRepo').value.trim();
@@ -485,6 +504,7 @@ $('btnSaveSettings').addEventListener('click', () => {
   S.beep = $('beep').classList.contains('on');
   Object.keys(S).forEach(k => localStorage.setItem(k, S[k]));
   $('settingsOverlay').classList.remove('show');
+  updateListUI();
   toast('Settings saved', 'ok');
   updateStatusFromSettings();
 });
@@ -600,12 +620,23 @@ async function pullProductCacheFromGitHub() {
   return true;
 }
 
-/* ---------- Active items (tracks current HA list entries per barcode) ---------- */
+/* ---------- Active items (tracks current HA list entries per barcode, per list) ---------- */
 function getActiveItems() { try { return JSON.parse(localStorage.getItem('activeItems') || '{}'); } catch(e) { return {}; } }
 function saveActiveItems(m) { localStorage.setItem('activeItems', JSON.stringify(m)); }
-function getActiveItem(barcode) { return getActiveItems()[barcode] || null; }
-function setActiveItem(barcode, data) { const m = getActiveItems(); m[barcode] = { itemName: data.itemName, qty: data.qty }; saveActiveItems(m); }
-function clearActiveItem(barcode) { const m = getActiveItems(); delete m[barcode]; saveActiveItems(m); }
+function activeKey(barcode) { return S.activeList + ':' + barcode; }
+function getActiveItem(barcode) { return getActiveItems()[activeKey(barcode)] || null; }
+function setActiveItem(barcode, data) { const m = getActiveItems(); m[activeKey(barcode)] = { itemName: data.itemName, qty: data.qty }; saveActiveItems(m); }
+function clearActiveItem(barcode) { const m = getActiveItems(); delete m[activeKey(barcode)]; saveActiveItems(m); }
+
+// Rename legacy (un-scoped) active items to list 1
+function migrateActiveItemsScoping() {
+  const m = getActiveItems();
+  let changed = false;
+  for (const k of Object.keys(m)) {
+    if (k.indexOf(':') === -1) { m['1:' + k] = m[k]; delete m[k]; changed = true; }
+  }
+  if (changed) saveActiveItems(m);
+}
 
 // Migrate legacy history into activeItems (one-time, best-effort)
 function migrateActiveItems() {
@@ -623,7 +654,7 @@ function migrateActiveItems() {
   }
   const out = {};
   for (const bc in byBarcode) {
-    if (byBarcode[bc]) out[bc] = byBarcode[bc];
+    if (byBarcode[bc]) out['1:' + bc] = byBarcode[bc];
   }
   if (Object.keys(out).length > 0) saveActiveItems(out);
 }
@@ -763,6 +794,30 @@ function updateModeUI() {
   const addBtn = $('btnAdd');
   if (addBtn) addBtn.textContent = S.mode === 'remove' ? 'Remove from list' : 'Add to list';
 }
+
+/* ---------- Two lists ---------- */
+function currentEntity() {
+  return (S.activeList === '2' && S.haEntity2) ? S.haEntity2 : S.haEntity;
+}
+function listLabel(n) {
+  const e = n === '2' ? S.haEntity2 : S.haEntity;
+  if (!e) return 'List ' + n;
+  const short = e.split('.').slice(1).join('.') || e;
+  return 'List ' + n + ': ' + short;
+}
+function updateListUI() {
+  const btn = $('btnList');
+  if (!btn) return;
+  btn.textContent = 'List ' + S.activeList + (S.haEntity2 ? ' ⇄' : '');
+  btn.title = listLabel(S.activeList) + (S.haEntity2 ? ' — tap to switch' : '');
+}
+$('btnList').addEventListener('click', () => {
+  if (!S.haEntity2) { toast('Add a List 2 entity in Settings first', 'err'); return; }
+  S.activeList = S.activeList === '2' ? '1' : '2';
+  localStorage.setItem('activeList', S.activeList);
+  updateListUI();
+  toast('Now using ' + listLabel(S.activeList), 'ok');
+});
 $('btnMode').addEventListener('click', () => {
   S.mode = (S.mode === 'remove') ? 'add' : 'remove';
   localStorage.setItem('mode', S.mode);
@@ -795,7 +850,7 @@ $('btnAdd').addEventListener('click', async () => {
         const r = await haFetch('/api/services/todo/remove_item', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ entity_id: S.haEntity, item: storedItemName })
+          body: JSON.stringify({ entity_id: currentEntity(), item: storedItemName })
         });
         if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
       } else {
@@ -814,8 +869,8 @@ $('btnAdd').addEventListener('click', async () => {
         if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
       }
 
-      // Mark all history add entries for this barcode as removed
-      history.forEach(h => { if (h.barcode === currentProduct.barcode && h.action === 'add') h.removed = true; });
+      // Mark all history add entries for this barcode/list as removed
+      history.forEach(h => { if (h.barcode === currentProduct.barcode && h.action === 'add' && (h.list || '1') === S.activeList) h.removed = true; });
 
       // Partial remove: if removing fewer than stored, re-add the remainder
       const removeQty = Math.min(qty, storedQty);
@@ -826,7 +881,7 @@ $('btnAdd').addEventListener('click', async () => {
           const r = await haFetch('/api/services/todo/add_item', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ entity_id: S.haEntity, item: newName })
+            body: JSON.stringify({ entity_id: currentEntity(), item: newName })
           });
           if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
         } else {
@@ -838,7 +893,7 @@ $('btnAdd').addEventListener('click', async () => {
           if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
         }
         // record the new remainder as an add entry
-        history.unshift({ name: editedName, brand: currentProduct.brand, barcode: currentProduct.barcode, qty: newQty, itemName: newName, action: 'add', ts: Date.now(), removed: false });
+        history.unshift({ name: editedName, brand: currentProduct.brand, barcode: currentProduct.barcode, list: S.activeList, qty: newQty, itemName: newName, action: 'add', ts: Date.now(), removed: false });
       }
 
       // Update active items tracker
@@ -851,7 +906,7 @@ $('btnAdd').addEventListener('click', async () => {
 
       const itemName = storedItemName;
       // record remove history
-      history.unshift({ name: editedName, brand: currentProduct.brand, barcode: currentProduct.barcode, qty: removeQty, itemName, action: 'remove', ts: Date.now(), removed: true });
+      history.unshift({ name: editedName, brand: currentProduct.brand, barcode: currentProduct.barcode, list: S.activeList, qty: removeQty, itemName, action: 'remove', ts: Date.now(), removed: true });
       history = history.slice(0, 500);
       localStorage.setItem('history', JSON.stringify(history));
       toast('Removed: ' + itemName, 'ok');
@@ -873,7 +928,7 @@ $('btnAdd').addEventListener('click', async () => {
           await haFetch('/api/services/todo/remove_item', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ entity_id: S.haEntity, item: oldItemName })
+            body: JSON.stringify({ entity_id: currentEntity(), item: oldItemName })
           });
         } else {
           await haFetch('/api/services/shopping_list/remove_item', {
@@ -884,8 +939,8 @@ $('btnAdd').addEventListener('click', async () => {
         }
       } catch(e) {}
       existingAdd.removed = true;
-      // mark history entry removed too
-      const histEntry = history.find(h => h.barcode === currentProduct.barcode && h.action === 'add' && !h.removed);
+      // mark history entry removed too (same list only)
+      const histEntry = history.find(h => h.barcode === currentProduct.barcode && h.action === 'add' && !h.removed && (h.list || '1') === S.activeList);
       if (histEntry) histEntry.removed = true;
 
       const totalQty = oldQty + qty;
@@ -894,7 +949,7 @@ $('btnAdd').addEventListener('click', async () => {
         const r = await haFetch('/api/services/todo/add_item', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ entity_id: S.haEntity, item: itemName })
+          body: JSON.stringify({ entity_id: currentEntity(), item: itemName })
         });
         if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
       } else {
@@ -906,7 +961,7 @@ $('btnAdd').addEventListener('click', async () => {
         if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
       }
       setActiveItem(currentProduct.barcode, { itemName, qty: totalQty });
-      history.unshift({ name: editedName, brand: currentProduct.brand, barcode: currentProduct.barcode, qty: totalQty, itemName, action: 'add', ts: Date.now(), removed: false });
+      history.unshift({ name: editedName, brand: currentProduct.brand, barcode: currentProduct.barcode, list: S.activeList, qty: totalQty, itemName, action: 'add', ts: Date.now(), removed: false });
       history = history.slice(0, 500);
       localStorage.setItem('history', JSON.stringify(history));
       toast('Updated: ' + itemName, 'ok');
@@ -916,7 +971,7 @@ $('btnAdd').addEventListener('click', async () => {
         const r = await haFetch('/api/services/todo/add_item', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ entity_id: S.haEntity, item: itemName })
+          body: JSON.stringify({ entity_id: currentEntity(), item: itemName })
         });
         if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
       } else {
@@ -928,7 +983,7 @@ $('btnAdd').addEventListener('click', async () => {
         if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
       }
       setActiveItem(currentProduct.barcode, { itemName, qty });
-      history.unshift({ name: editedName, brand: currentProduct.brand, barcode: currentProduct.barcode, qty, itemName, action: 'add', ts: Date.now(), removed: false });
+      history.unshift({ name: editedName, brand: currentProduct.brand, barcode: currentProduct.barcode, list: S.activeList, qty, itemName, action: 'add', ts: Date.now(), removed: false });
       history = history.slice(0, 500);
       localStorage.setItem('history', JSON.stringify(history));
       toast('Added: ' + itemName, 'ok');
@@ -954,7 +1009,7 @@ function renderHistory() {
     <div class="history-item">
       <div class="hname">
         <div class="title">${h.action === 'remove' ? '➖' : '➕'} ${escapeHtml(h.name)}</div>
-        <div class="sub">${escapeHtml(h.brand||'')} · ${h.barcode||''} · ${new Date(h.ts).toLocaleString()}</div>
+        <div class="sub">${h.list === '2' ? 'List 2 · ' : ''}${escapeHtml(h.brand||'')} · ${h.barcode||''} · ${new Date(h.ts).toLocaleString()}</div>
       </div>
       <span class="hqty">×${h.qty||1}</span>
     </div>
@@ -1114,9 +1169,12 @@ window.addEventListener('load', async () => {
   const vl = document.getElementById('versionLabel');
   if (vl) vl.textContent = 'v' + VERSION;
   loadSettingsUI();
+  if (S.activeList === '2' && !S.haEntity2) { S.activeList = '1'; localStorage.setItem('activeList', '1'); }
+  migrateActiveItemsScoping();
   migrateActiveItems();
   if (ghConfigured()) { pullProductCacheFromGitHub().catch(e => console.warn('GitHub sync pull failed', e)); }
   updateModeUI();
+  updateListUI();
   updateStatusFromSettings();
   await startScanner();
 });
