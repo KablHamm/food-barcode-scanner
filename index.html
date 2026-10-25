@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <link rel="manifest" href="manifest.json" />
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
-<title>Food Barcode Scanner → Home Assistant</title>
+<title>Barcode Scanner → Home Assistant</title>
 <style>
   :root {
     --bg: #0b1220;
@@ -158,7 +158,7 @@
 </head>
 <body>
 <header>
-  <h1>🛒 Food Scanner <span id="versionLabel" style="font-size:11px;color:var(--muted);font-weight:400"></span></h1>
+  <h1>🛒 Barcode Scanner <span id="versionLabel" style="font-size:11px;color:var(--muted);font-weight:400"></span></h1>
   <div class="actions">
     <button class="icon-btn" id="btnMode" title="Toggle add/remove mode">➕</button>
     <button class="icon-btn" id="btnManual" title="Manual entry">⌨️</button>
@@ -338,7 +338,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.5';
+const VERSION = '1.6.6';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -463,22 +463,44 @@ async function haFetch(path, opts={}) {
 }
 
 /* ---------- Product lookup ---------- */
+const PRODUCT_SOURCES = [
+  { name: 'Open Food Facts', base: (c) => c === 'world' ? 'https://world.openfoodfacts.org' : `https://${c}.openfoodfacts.org` },
+  { name: 'Open Products Facts', base: () => 'https://world.openproductsfacts.org' },
+  { name: 'Open Beauty Facts', base: () => 'https://world.openbeautyfacts.org' },
+];
+
 async function lookupProduct(barcode) {
   const country = S.offCountry === 'world' ? 'world' : S.offCountry;
-  const base = country === 'world'
-    ? 'https://world.openfoodfacts.org'
-    : `https://${country}.openfoodfacts.org`;
+  for (const src of PRODUCT_SOURCES) {
+    try {
+      const base = src.base(country);
+      const r = await fetch(`${base}/api/v0/product/${barcode}.json`);
+      const data = await r.json();
+      if (data.status === 1 && data.product) {
+        const p = data.product;
+        const name = p.product_name || p.product_name_en || p.generic_name || p.product_name_fr || '';
+        if (name.trim()) {
+          return {
+            barcode,
+            name: name.trim(),
+            brand: (p.brands || '').split(',')[0].trim(),
+            image: p.image_small_url || p.image_front_small_url || p.image_url || p.image_thumb_url || ''
+          };
+        }
+      }
+    } catch(e) {}
+  }
+  // Fallback: UPC Item DB (free, no key) for general products
   try {
-    const r = await fetch(`${base}/api/v0/product/${barcode}.json`);
+    const r = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${barcode}`);
     const data = await r.json();
-    if (data.status === 1 && data.product) {
-      const p = data.product;
-      const name = p.product_name || p.product_name_en || p.generic_name || `Unknown product`;
+    if (data.code === 'OK' && data.items && data.items.length) {
+      const it = data.items[0];
       return {
         barcode,
-        name: name.trim(),
-        brand: (p.brands || '').split(',')[0].trim(),
-        image: p.image_small_url || p.image_front_small_url || p.image_url || ''
+        name: (it.title || '').trim() || `Unknown product (${barcode})`,
+        brand: (it.brand || '').trim(),
+        image: (it.images && it.images[0]) || ''
       };
     }
   } catch(e) {}
