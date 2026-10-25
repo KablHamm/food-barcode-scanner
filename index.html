@@ -339,7 +339,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.11';
+const VERSION = '1.6.12';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -468,6 +468,13 @@ function getProductCache() { try { return JSON.parse(localStorage.getItem('produ
 function saveProductCache(cache) { localStorage.setItem('productCache', JSON.stringify(cache)); }
 function getCachedProduct(barcode) { const c = getProductCache(); return c[barcode] || null; }
 function setCachedProduct(barcode, data) { const c = getProductCache(); c[barcode] = { name: data.name, brand: data.brand || '', image: data.image || '' }; saveProductCache(c); }
+
+/* ---------- Active items (tracks current HA list entries per barcode) ---------- */
+function getActiveItems() { try { return JSON.parse(localStorage.getItem('activeItems') || '{}'); } catch(e) { return {}; } }
+function saveActiveItems(m) { localStorage.setItem('activeItems', JSON.stringify(m)); }
+function getActiveItem(barcode) { return getActiveItems()[barcode] || null; }
+function setActiveItem(barcode, data) { const m = getActiveItems(); m[barcode] = { itemName: data.itemName, qty: data.qty }; saveActiveItems(m); }
+function clearActiveItem(barcode) { const m = getActiveItems(); delete m[barcode]; saveActiveItems(m); }
 
 /* ---------- Product lookup ---------- */
 const PRODUCT_SOURCES = [
@@ -624,10 +631,11 @@ $('btnAdd').addEventListener('click', async () => {
     setCachedProduct(currentProduct.barcode, { name: editedName, brand: currentProduct.brand, image: currentProduct.image });
 
     if (removing) {
-      // Find the most recent un-removed add entry for this barcode to get the exact stored item name
-      const lastAdd = history.find(h => h.barcode === currentProduct.barcode && h.action === 'add' && !h.removed);
-      const storedQty = lastAdd ? (lastAdd.qty || 1) : qty;
-      const storedItemName = lastAdd && lastAdd.itemName ? lastAdd.itemName : (S.qtyInName && storedQty > 1 ? `${editedName} x${storedQty}` : editedName);
+      // Prefer the active-items tracker (reliable); fall back to history
+      const ai = getActiveItem(currentProduct.barcode);
+      const lastAdd = ai ? null : history.find(h => h.barcode === currentProduct.barcode && h.action === 'add' && !h.removed);
+      const storedQty = ai ? ai.qty : (lastAdd ? (lastAdd.qty || 1) : qty);
+      const storedItemName = ai ? ai.itemName : (lastAdd && lastAdd.itemName ? lastAdd.itemName : (S.qtyInName && storedQty > 1 ? `${editedName} x${storedQty}` : editedName));
 
       // Remove the stored item from HA
       if (S.listType === 'todo') {
@@ -680,6 +688,14 @@ $('btnAdd').addEventListener('click', async () => {
         history.unshift({ name: editedName, brand: currentProduct.brand, barcode: currentProduct.barcode, qty: newQty, itemName: newName, action: 'add', ts: Date.now(), removed: false });
       }
 
+      // Update active items tracker
+      if (newQty > 0) {
+        const newName = S.qtyInName && newQty > 1 ? `${editedName} x${newQty}` : editedName;
+        setActiveItem(currentProduct.barcode, { itemName: newName, qty: newQty });
+      } else {
+        clearActiveItem(currentProduct.barcode);
+      }
+
       const itemName = storedItemName;
       // record remove history
       history.unshift({ name: editedName, brand: currentProduct.brand, barcode: currentProduct.barcode, qty: removeQty, itemName, action: 'remove', ts: Date.now(), removed: true });
@@ -692,7 +708,8 @@ $('btnAdd').addEventListener('click', async () => {
     }
 
     // Add mode: if item already exists, increase quantity instead of duplicating
-    const existingAdd = history.find(h => h.barcode === currentProduct.barcode && h.action === 'add' && !h.removed);
+    const aiExisting = getActiveItem(currentProduct.barcode);
+    const existingAdd = aiExisting ? { qty: aiExisting.qty, itemName: aiExisting.itemName } : history.find(h => h.barcode === currentProduct.barcode && h.action === 'add' && !h.removed);
     let itemName;
     if (existingAdd) {
       const oldQty = existingAdd.qty || 1;
@@ -714,6 +731,9 @@ $('btnAdd').addEventListener('click', async () => {
         }
       } catch(e) {}
       existingAdd.removed = true;
+      // mark history entry removed too
+      const histEntry = history.find(h => h.barcode === currentProduct.barcode && h.action === 'add' && !h.removed);
+      if (histEntry) histEntry.removed = true;
 
       const totalQty = oldQty + qty;
       itemName = S.qtyInName && totalQty > 1 ? `${editedName} x${totalQty}` : editedName;
@@ -732,6 +752,7 @@ $('btnAdd').addEventListener('click', async () => {
         });
         if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
       }
+      setActiveItem(currentProduct.barcode, { itemName, qty: totalQty });
       history.unshift({ name: editedName, brand: currentProduct.brand, barcode: currentProduct.barcode, qty: totalQty, itemName, action: 'add', ts: Date.now(), removed: false });
       history = history.slice(0, 500);
       localStorage.setItem('history', JSON.stringify(history));
@@ -753,6 +774,7 @@ $('btnAdd').addEventListener('click', async () => {
         });
         if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
       }
+      setActiveItem(currentProduct.barcode, { itemName, qty });
       history.unshift({ name: editedName, brand: currentProduct.brand, barcode: currentProduct.barcode, qty, itemName, action: 'add', ts: Date.now(), removed: false });
       history = history.slice(0, 500);
       localStorage.setItem('history', JSON.stringify(history));
