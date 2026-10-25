@@ -89,6 +89,7 @@
   .result-card img { width:80px; height:80px; object-fit:contain; background:#fff; border-radius:10px; }
   .result-card .info { flex:1; min-width:0; }
   .result-card .name { font-size:18px; font-weight:600; margin:0 0 4px; }
+  .result-card .name-input { width:100%; font-size:18px; font-weight:600; margin:0 0 4px; padding:4px 6px; border:1px dashed var(--border); border-radius:8px; background:var(--panel2); color:var(--text); }
   .result-card .brand { color:var(--muted); font-size:14px; margin:0 0 6px; }
   .result-card .barcode { font-family:monospace; font-size:12px; color:var(--muted); }
   .qty-row { display:flex; align-items:center; gap:12px; margin:16px 0; }
@@ -185,7 +186,7 @@
     <div class="row">
       <img id="resImg" src="" alt="" onerror="this.style.display='none'" />
       <div class="info">
-        <p class="name" id="resName">—</p>
+        <input class="name-input" id="resName" value="—" />
         <p class="brand" id="resBrand"></p>
         <p class="barcode" id="resBarcode"></p>
       </div>
@@ -338,7 +339,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.6';
+const VERSION = '1.6.7';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -556,7 +557,7 @@ async function onScanSuccess(decodedText) {
 
   qty = 1;
   $('qtyVal').textContent = '1';
-  $('resName').textContent = currentProduct.name;
+  $('resName').value = currentProduct.name;
   $('resBrand').textContent = currentProduct.brand || '';
   $('resBarcode').textContent = currentProduct.barcode;
   const img = $('resImg');
@@ -603,9 +604,11 @@ $('btnAdd').addEventListener('click', async () => {
   const removing = S.mode === 'remove';
   btn.textContent = removing ? 'Removing…' : 'Adding…';
   try {
+    const editedName = ($('resName').value || '').trim() || currentProduct.name;
+    currentProduct.name = editedName;
     const itemName = S.qtyInName && qty > 1
-      ? `${currentProduct.name} x${qty}`
-      : currentProduct.name;
+      ? `${editedName} x${qty}`
+      : editedName;
     if (S.listType === 'todo') {
       const service = removing ? 'remove_item' : 'add_item';
       const body = removing
@@ -715,7 +718,7 @@ $('btnLookupManual').addEventListener('click', async () => {
   const r = await lookupProduct(bc);
   currentProduct = r;
   qty = 1; $('qtyVal').textContent = '1';
-  $('resName').textContent = r.name;
+  $('resName').value = r.name;
   $('resBrand').textContent = r.brand || '';
   $('resBarcode').textContent = r.barcode;
   const img = $('resImg');
