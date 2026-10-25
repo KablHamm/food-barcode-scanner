@@ -8,5 +8,15 @@
     "name": "Unknown product (5031021751225)",
     "brand": "",
     "image": ""
+  },
+  "5018374230775": {
+    "name": "Tesco Gold Coffee 200G",
+    "brand": "Tesco",
+    "image": "https://images.openfoodfacts.org/images/products/501/837/423/0775/front_fr.16.200.jpg"
+  },
+  "5000295006829": {
+    "name": "63% fat spread with buttermilk",
+    "brand": "Clover",
+    "image": "https://images.openfoodfacts.org/images/products/500/029/500/6829/front_en.40.200.jpg"
   }
 }
