@@ -105,6 +105,11 @@
   .qty-row { display:flex; align-items:center; gap:12px; margin:16px 0; }
   .qty-row button { width:44px; height:44px; border-radius:10px; border:1px solid var(--border); background:var(--panel2); color:var(--text); font-size:22px; cursor:pointer; }
   .qty-row .qty { font-size:22px; font-weight:600; min-width:40px; text-align:center; }
+  .qty-row .mode-pill {
+    margin-left:auto; width:auto; height:38px; padding:0 14px; border-radius:999px;
+    font-size:14px; font-weight:600;
+  }
+  .qty-row .mode-pill.remove { border-color:var(--danger); color:var(--danger); background:rgba(239,68,68,.12); }
   .actions-row { display:flex; gap:10px; }
   .btn { flex:1; padding:14px; border:none; border-radius:12px; font-size:16px; font-weight:600; cursor:pointer; }
   .btn.primary { background:var(--accent); color:#052e16; }
@@ -171,7 +176,6 @@
 <header>
   <h1>🛒 Barcode Scanner <span id="versionLabel" style="font-size:11px;color:var(--muted);font-weight:400"></span></h1>
   <div class="actions">
-    <button class="icon-btn" id="btnMode" title="Toggle add/remove mode">➕</button>
     <button class="icon-btn" id="btnManual" title="Manual entry">⌨️</button>
     <button class="icon-btn" id="btnHistory" title="History">📋</button>
     <button class="icon-btn" id="btnSettings" title="Settings">⚙️</button>
@@ -207,7 +211,7 @@
       <button id="qtyMinus">−</button>
       <div class="qty" id="qtyVal">1</div>
       <button id="qtyPlus">+</button>
-      <span class="small" style="margin-left:auto">Quantity</span>
+      <button id="btnModeCard" class="mode-pill" title="Toggle add/remove mode">➕ Add</button>
     </div>
     <div class="actions-row">
       <button class="btn secondary" id="btnSkip">Skip</button>
@@ -382,7 +386,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.20';
+const VERSION = '1.6.21';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -787,6 +791,7 @@ async function onScanSuccess(decodedText) {
   const img = $('resImg');
   if (currentProduct.image) { img.src = currentProduct.image; img.style.display = ''; }
   else { img.style.display = 'none'; }
+  updateModeUI();
   $('cardOverlay').classList.add('show');
 }
 
@@ -808,9 +813,12 @@ $('qtyPlus').addEventListener('click', () => {
 $('btnSkip').addEventListener('click', resumeScanning);
 
 function updateModeUI() {
-  const btn = $('btnMode');
-  if (S.mode === 'remove') { btn.textContent = '➖'; btn.title = 'Mode: Remove (tap to switch to Add)'; }
-  else { btn.textContent = '➕'; btn.title = 'Mode: Add (tap to switch to Remove)'; }
+  const btn = $('btnModeCard');
+  if (btn) {
+    btn.textContent = S.mode === 'remove' ? '➖ Remove' : '➕ Add';
+    btn.title = S.mode === 'remove' ? 'Mode: Remove (tap to switch to Add)' : 'Mode: Add (tap to switch to Remove)';
+    btn.classList.toggle('remove', S.mode === 'remove');
+  }
   const addBtn = $('btnAdd');
   if (addBtn) addBtn.textContent = S.mode === 'remove' ? 'Remove from list' : 'Add to list';
 }
@@ -845,7 +853,7 @@ $('btnList').addEventListener('click', () => {
   updateListUI();
   toast('Now using ' + listLabel(S.activeList), 'ok');
 });
-$('btnMode').addEventListener('click', () => {
+$('btnModeCard').addEventListener('click', () => {
   S.mode = (S.mode === 'remove') ? 'add' : 'remove';
   localStorage.setItem('mode', S.mode);
   updateModeUI();
@@ -1090,6 +1098,7 @@ $('btnLookupManual').addEventListener('click', async () => {
   if (r.image) { img.src = r.image; img.style.display = ''; }
   else { img.style.display = 'none'; }
   $('manualOverlay').classList.remove('show');
+  updateModeUI();
   $('cardOverlay').classList.add('show');
 });
 
