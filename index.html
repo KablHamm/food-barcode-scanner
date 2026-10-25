@@ -266,8 +266,20 @@
     </div>
     <div class="field">
       <label>Reset local data</label>
-      <button class="btn secondary" id="btnResetData" style="width:100%">Clear history, cache & active items</button>
-      <div class="hint">Use if quantities get out of sync. Does not affect Home Assistant.</div>
+      <button class="btn secondary" id="btnResetData" style="width:100%">Clear history & active items</button>
+      <div class="hint">Does not affect Home Assistant or your saved product names.</div>
+    </div>
+    <div class="field">
+      <label>GitHub sync (optional) — persist names in your repo</label>
+      <input id="ghToken" type="password" placeholder="github_pat_… (contents: write)" />
+      <div class="hint">Fine-grained token scoped to this repo with Contents: Read & write. Stored locally in your browser.</div>
+    </div>
+    <div class="field">
+      <label>GitHub repo (owner/repo)</label>
+      <input id="ghRepo" placeholder="KablHamm/food-barcode-scanner" />
+    </div>
+    <div class="manual-row" style="margin-bottom:14px">
+      <button class="btn secondary" id="btnSyncNow" style="flex:1">Sync now</button>
     </div>
     <div class="panel-actions">
       <button class="btn secondary" id="btnTest">Test connection</button>
@@ -344,7 +356,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.15';
+const VERSION = '1.6.16';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -355,6 +367,8 @@ const S = {
   vibrate: localStorage.getItem('vibrate') !== 'false',
   beep: localStorage.getItem('beep') !== 'false',
   mode: localStorage.getItem('mode') || 'add',
+  ghToken: localStorage.getItem('ghToken') || '',
+  ghRepo: localStorage.getItem('ghRepo') || '',
 };
 let history = JSON.parse(localStorage.getItem('history') || '[]');
 let scanned = JSON.parse(localStorage.getItem('scanned') || '[]');
@@ -409,6 +423,8 @@ function loadSettingsUI() {
   $('listType').value = S.listType;
   $('haEntity').value = S.haEntity;
   $('offCountry').value = S.offCountry;
+  $('ghToken').value = S.ghToken;
+  $('ghRepo').value = S.ghRepo;
   setSwitch('qtyInName', S.qtyInName);
   setSwitch('vibrate', S.vibrate);
   setSwitch('beep', S.beep);
@@ -433,12 +449,28 @@ $('settingsOverlay').addEventListener('click', e => {
   if (e.target === $('settingsOverlay')) $('settingsOverlay').classList.remove('show');
 });
 
+$('btnSyncNow').addEventListener('click', async () => {
+  S.ghToken = $('ghToken').value.trim();
+  S.ghRepo = $('ghRepo').value.trim();
+  localStorage.setItem('ghToken', S.ghToken);
+  localStorage.setItem('ghRepo', S.ghRepo);
+  if (!ghConfigured()) { toast('Enter a GitHub token and repo first', 'err'); return; }
+  const btn = $('btnSyncNow'); btn.disabled = true; const old = btn.textContent; btn.textContent = 'Syncing…';
+  try {
+    await pullProductCacheFromGitHub();
+    await pushProductCacheToGitHub();
+    toast('Synced product names with GitHub ✓', 'ok');
+  } catch (e) {
+    toast('Sync failed: ' + e.message, 'err');
+  } finally { btn.disabled = false; btn.textContent = old; }
+});
 $('btnResetData').addEventListener('click', () => {
-  if (!confirm('Clear all local history, cache, and active-item tracking?')) return;
+  if (!confirm('Clear history and active-item tracking? (Saved product names are kept.)')) return;
   history = []; scanned = [];
   localStorage.removeItem('history'); localStorage.removeItem('scanned');
-  localStorage.removeItem('productCache'); localStorage.removeItem('activeItems');
-  toast('Local data cleared', 'ok');
+  localStorage.removeItem('activeItems');
+  // productCache (manually-entered names) is intentionally preserved
+  toast('Local data cleared (names kept)', 'ok');
 });
 $('btnSaveSettings').addEventListener('click', () => {
   S.haUrl = $('haUrl').value.trim().replace(/\/$/, '');
@@ -446,6 +478,8 @@ $('btnSaveSettings').addEventListener('click', () => {
   S.listType = $('listType').value;
   S.haEntity = $('haEntity').value.trim() || 'todo.shopping_list';
   S.offCountry = $('offCountry').value;
+  S.ghToken = $('ghToken').value.trim();
+  S.ghRepo = $('ghRepo').value.trim();
   S.qtyInName = $('qtyInName').classList.contains('on');
   S.vibrate = $('vibrate').classList.contains('on');
   S.beep = $('beep').classList.contains('on');
@@ -490,6 +524,80 @@ function setCachedProduct(barcode, data) {
   }
   c[barcode] = { name: newName || (existing ? existing.name : `Unknown product (${barcode})`), brand: data.brand || (existing ? existing.brand : ''), image: data.image || (existing ? existing.image : '') };
   saveProductCache(c);
+}
+
+/* ---------- GitHub sync (persist product names in the repo) ---------- */
+function ghConfigured() { return !!(S.ghToken && S.ghRepo); }
+function b64EncodeUtf8(str) { return btoa(unescape(encodeURIComponent(str))); }
+function b64DecodeUtf8(str) { return decodeURIComponent(escape(atob((str || '').replace(/\s/g, '')))); }
+
+async function ghRequest(method, path, body) {
+  const url = 'https://api.github.com/repos/' + S.ghRepo + '/contents/' + path;
+  const headers = {
+    'Authorization': 'Bearer ' + S.ghToken,
+    'Accept': 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28'
+  };
+  const opts = { method, headers };
+  if (body) { headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+  return fetch(url, opts);
+}
+
+async function ghGetFile(path, branch) {
+  const r = await ghRequest('GET', path + (branch ? '?ref=' + encodeURIComponent(branch) : ''));
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error('GitHub read ' + r.status);
+  return r.json();
+}
+
+async function ghPutFile(path, text, message) {
+  let sha = null;
+  try { const cur = await ghGetFile(path, 'main'); if (cur && cur.sha) sha = cur.sha; } catch (e) {}
+  const body = { message: message || 'Update product names', content: b64EncodeUtf8(text), branch: 'main' };
+  if (sha) body.sha = sha;
+  const r = await ghRequest('PUT', path, body);
+  if (!r.ok) {
+    let detail = '';
+    try { const j = await r.json(); detail = j.message || ''; } catch (e) {}
+    throw new Error('GitHub write ' + r.status + (detail ? ' — ' + detail : ''));
+  }
+  return r.json();
+}
+
+async function pushProductCacheToGitHub() {
+  if (!ghConfigured()) return false;
+  await ghPutFile('productCache.json', JSON.stringify(getProductCache(), null, 2), 'Update product names (auto-sync from app)');
+  return true;
+}
+
+// Serialize pushes so rapid adds don't collide on the file SHA
+let ghPushChain = Promise.resolve();
+function queuePushProductCache() {
+  ghPushChain = ghPushChain
+    .then(() => pushProductCacheToGitHub())
+    .catch(e => console.warn('GitHub sync push failed', e));
+  return ghPushChain;
+}
+
+async function pullProductCacheFromGitHub() {
+  if (!ghConfigured()) return false;
+  const file = await ghGetFile('productCache.json', 'main');
+  if (!file || !file.content) return false;
+  let remote = {};
+  try { remote = JSON.parse(b64DecodeUtf8(file.content)); } catch (e) { return false; }
+  const local = getProductCache();
+  const merged = { ...local };
+  for (const bc in remote) {
+    const rv = remote[bc];
+    if (!rv || !rv.name) continue;
+    const lv = local[bc];
+    const remoteKnown = !/^Unknown product/i.test(rv.name);
+    const localKnown = !!(lv && lv.name && !/^Unknown product/i.test(lv.name));
+    if (remoteKnown && !localKnown) merged[bc] = { ...(lv || {}), ...rv };
+    else if (!lv) merged[bc] = rv;
+  }
+  saveProductCache(merged);
+  return true;
 }
 
 /* ---------- Active items (tracks current HA list entries per barcode) ---------- */
@@ -673,6 +781,8 @@ $('btnAdd').addEventListener('click', async () => {
     currentProduct.name = editedName;
     // Remember this name for next time this barcode is scanned
     setCachedProduct(currentProduct.barcode, { name: editedName, brand: currentProduct.brand, image: currentProduct.image });
+    // Persist the name to the GitHub repo (if configured) so it survives resets/devices
+    if (ghConfigured()) { queuePushProductCache(); }
 
     if (removing) {
       // Prefer the active-items tracker (reliable); fall back to computed name (no stale history)
@@ -1005,6 +1115,7 @@ window.addEventListener('load', async () => {
   if (vl) vl.textContent = 'v' + VERSION;
   loadSettingsUI();
   migrateActiveItems();
+  if (ghConfigured()) { pullProductCacheFromGitHub().catch(e => console.warn('GitHub sync pull failed', e)); }
   updateModeUI();
   updateStatusFromSettings();
   await startScanner();
