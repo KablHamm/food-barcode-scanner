@@ -251,6 +251,14 @@
       <span>Beep on scan</span>
       <div class="switch on" id="beep"></div>
     </div>
+    <div class="field">
+      <label>Quick setup via QR code</label>
+      <div class="manual-row">
+        <button class="btn secondary" id="btnScanQr" style="flex:1">📷 Scan QR</button>
+        <button class="btn secondary" id="btnGenQr" style="flex:1">Generate QR</button>
+      </div>
+      <div class="hint">Scan a QR with your HA URL + token, or generate one from current settings to share with another device.</div>
+    </div>
     <div class="panel-actions">
       <button class="btn secondary" id="btnTest">Test connection</button>
       <button class="btn primary" id="btnSaveSettings">Save</button>
@@ -296,9 +304,34 @@
   </div>
 </div>
 
+<!-- QR scan overlay -->
+<div class="panel-overlay" id="qrOverlay">
+  <div class="panel" style="text-align:center">
+    <h2>Scan QR code</h2>
+    <div id="qrReader" style="width:100%;aspect-ratio:1;background:#000;border-radius:10px;overflow:hidden;margin-bottom:12px"></div>
+    <p class="small">Point at a QR code containing your HA URL + token, or just a token.</p>
+    <div class="panel-actions">
+      <button class="btn secondary" id="btnCloseQr">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- QR generate overlay -->
+<div class="panel-overlay" id="qrGenOverlay">
+  <div class="panel" style="text-align:center">
+    <h2>Your setup QR</h2>
+    <div id="qrOutput" style="display:flex;justify-content:center;margin:12px 0"></div>
+    <p class="small">Scan this with another device's "Scan QR" button to copy your HA URL + token.</p>
+    <div class="panel-actions">
+      <button class="btn secondary" id="btnCloseQrGen">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
 const S = {
@@ -627,6 +660,104 @@ $('btnLookupManual').addEventListener('click', async () => {
   $('manualOverlay').classList.remove('show');
   $('cardOverlay').classList.add('show');
 });
+
+/* ---------- QR scan to fill settings ---------- */
+let qrScanner = null;
+let qrScanning = false;
+
+function parseQrPayload(text) {
+  text = (text || '').trim();
+  // Try JSON
+  if (text.startsWith('{')) {
+    try {
+      const o = JSON.parse(text);
+      return {
+        url: o.url || o.haUrl || o.ha_url || '',
+        token: o.token || o.haToken || o.ha_token || o.access_token || '',
+        entity: o.entity || o.haEntity || o.entity_id || '',
+        listType: o.listType || o.list_type || ''
+      };
+    } catch(e) {}
+  }
+  // Try URL with query params
+  try {
+    const u = new URL(text);
+    const params = u.searchParams;
+    const token = params.get('token') || params.get('access_token') || '';
+    if (token) {
+      return { url: u.origin + u.pathname.replace(/\/$/, ''), token, entity: params.get('entity') || '', listType: params.get('listType') || '' };
+    }
+  } catch(e) {}
+  // Key=value pairs
+  if (/token\s*=/.test(text)) {
+    const m = text.match(/url\s*=\s*(\S+)/i);
+    const t = text.match(/token\s*=\s*(\S+)/i);
+    if (t) return { url: m ? m[1] : '', token: t[1], entity: '', listType: '' };
+  }
+  // Plain token
+  return { url: '', token: text, entity: '', listType: '' };
+}
+
+async function startQrScan() {
+  // pause main scanner
+  if (scanning) { try { await html5QrCode.pause(true); } catch(e){} }
+  $('qrOverlay').classList.add('show');
+  if (qrScanning) return;
+  try {
+    qrScanner = new Html5Qrcode('qrReader');
+    const cameras = await Html5Qrcode.getCameras();
+    let cam = cameras.find(c => /back|rear|environment/i.test(c.label)) || cameras[cameras.length-1];
+    await qrScanner.start(cam.id, { fps: 12, qrbox: { width: 220, height: 220 } }, (decoded) => {
+      const parsed = parseQrPayload(decoded);
+      if (parsed.url) $('haUrl').value = parsed.url;
+      if (parsed.token) $('haToken').value = parsed.token;
+      if (parsed.entity) $('haEntity').value = parsed.entity;
+      if (parsed.listType) $('listType').value = parsed.listType;
+      toggleEntityField();
+      toast('QR scanned — review & Save', 'ok');
+      stopQrScan();
+    }, () => {});
+    qrScanning = true;
+  } catch(e) {
+    toast('Camera error: ' + (e.message || e), 'err');
+    stopQrScan();
+  }
+}
+
+async function stopQrScan() {
+  qrScanning = false;
+  if (qrScanner) {
+    try { await qrScanner.stop(); } catch(e){}
+    qrScanner = null;
+  }
+  $('qrOverlay').classList.remove('show');
+  // resume main scanner
+  if (html5QrCode) { try { html5QrCode.resume(); } catch(e){} }
+}
+
+function generateQr() {
+  const url = $('haUrl').value.trim();
+  const token = $('haToken').value.trim();
+  const entity = $('haEntity').value.trim();
+  const listType = $('listType').value;
+  if (!token) { toast('Enter a token first', 'err'); return; }
+  const payload = JSON.stringify({ url, token, entity, listType });
+  const out = $('qrOutput');
+  out.innerHTML = '';
+  try {
+    new QRCode(out, { text: payload, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
+    $('qrGenOverlay').classList.add('show');
+  } catch(e) {
+    toast('QR generation failed: ' + e.message, 'err');
+  }
+}
+
+$('btnScanQr').addEventListener('click', startQrScan);
+$('btnGenQr').addEventListener('click', generateQr);
+$('btnCloseQr').addEventListener('click', stopQrScan);
+$('btnCloseQrGen').addEventListener('click', () => $('qrGenOverlay').classList.remove('show'));
+$('qrOverlay').addEventListener('click', e => { if (e.target === $('qrOverlay')) stopQrScan(); });
+$('qrGenOverlay').addEventListener('click', e => { if (e.target === $('qrGenOverlay')) $('qrGenOverlay').classList.remove('show'); });
 
 /* ---------- Init ---------- */
 window.addEventListener('load', async () => {
