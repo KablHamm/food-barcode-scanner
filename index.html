@@ -264,6 +264,11 @@
       </div>
       <div class="hint">Scan a QR with your HA URL + token, or generate one from current settings to share with another device.</div>
     </div>
+    <div class="field">
+      <label>Reset local data</label>
+      <button class="btn secondary" id="btnResetData" style="width:100%">Clear history, cache & active items</button>
+      <div class="hint">Use if quantities get out of sync. Does not affect Home Assistant.</div>
+    </div>
     <div class="panel-actions">
       <button class="btn secondary" id="btnTest">Test connection</button>
       <button class="btn primary" id="btnSaveSettings">Save</button>
@@ -339,7 +344,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.12';
+const VERSION = '1.6.13';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -428,6 +433,13 @@ $('settingsOverlay').addEventListener('click', e => {
   if (e.target === $('settingsOverlay')) $('settingsOverlay').classList.remove('show');
 });
 
+$('btnResetData').addEventListener('click', () => {
+  if (!confirm('Clear all local history, cache, and active-item tracking?')) return;
+  history = []; scanned = [];
+  localStorage.removeItem('history'); localStorage.removeItem('scanned');
+  localStorage.removeItem('productCache'); localStorage.removeItem('activeItems');
+  toast('Local data cleared', 'ok');
+});
 $('btnSaveSettings').addEventListener('click', () => {
   S.haUrl = $('haUrl').value.trim().replace(/\/$/, '');
   S.haToken = $('haToken').value.trim();
@@ -475,6 +487,27 @@ function saveActiveItems(m) { localStorage.setItem('activeItems', JSON.stringify
 function getActiveItem(barcode) { return getActiveItems()[barcode] || null; }
 function setActiveItem(barcode, data) { const m = getActiveItems(); m[barcode] = { itemName: data.itemName, qty: data.qty }; saveActiveItems(m); }
 function clearActiveItem(barcode) { const m = getActiveItems(); delete m[barcode]; saveActiveItems(m); }
+
+// Migrate legacy history into activeItems (one-time, best-effort)
+function migrateActiveItems() {
+  const m = getActiveItems();
+  if (Object.keys(m).length > 0) return; // already populated
+  const byBarcode = {};
+  // history is newest-first; process to find last state per barcode
+  for (const h of history) {
+    if (byBarcode[h.barcode] !== undefined) continue;
+    if (h.action === 'add' && !h.removed) {
+      byBarcode[h.barcode] = { itemName: h.itemName || (S.qtyInName && (h.qty||1) > 1 ? `${h.name} x${h.qty}` : h.name), qty: h.qty || 1 };
+    } else if (h.action === 'remove') {
+      byBarcode[h.barcode] = null; // removed
+    }
+  }
+  const out = {};
+  for (const bc in byBarcode) {
+    if (byBarcode[bc]) out[bc] = byBarcode[bc];
+  }
+  if (Object.keys(out).length > 0) saveActiveItems(out);
+}
 
 /* ---------- Product lookup ---------- */
 const PRODUCT_SOURCES = [
@@ -961,6 +994,7 @@ window.addEventListener('load', async () => {
   const vl = document.getElementById('versionLabel');
   if (vl) vl.textContent = 'v' + VERSION;
   loadSettingsUI();
+  migrateActiveItems();
   updateModeUI();
   updateStatusFromSettings();
   await startScanner();
