@@ -338,7 +338,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.4';
+const VERSION = '1.6.5';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -820,7 +820,7 @@ if ('serviceWorker' in navigator) {
     window.location.reload();
   });
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(err => console.warn('SW reg failed', err));
+    navigator.serviceWorker.register('./sw.js?v=' + VERSION, { updateViaCache: 'none' }).catch(err => console.warn('SW reg failed', err));
   });
 }
 
