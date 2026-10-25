@@ -699,8 +699,8 @@ function parseQrPayload(text) {
 }
 
 async function startQrScan() {
-  // pause main scanner
-  if (scanning) { try { await html5QrCode.pause(true); } catch(e){} }
+  // fully stop main scanner so the camera is released
+  if (scanning) { try { await html5QrCode.stop(); } catch(e){} scanning = false; }
   $('qrOverlay').classList.add('show');
   if (qrScanning) return;
   try {
@@ -731,8 +731,8 @@ async function stopQrScan() {
     qrScanner = null;
   }
   $('qrOverlay').classList.remove('show');
-  // resume main scanner
-  if (html5QrCode) { try { html5QrCode.resume(); } catch(e){} }
+  // restart main scanner
+  await startScanner();
 }
 
 function generateQr() {
