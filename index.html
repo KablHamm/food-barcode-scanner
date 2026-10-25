@@ -339,7 +339,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.7';
+const VERSION = '1.6.8';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -463,6 +463,12 @@ async function haFetch(path, opts={}) {
   return fetch(url, { ...opts, headers });
 }
 
+/* ---------- Product cache (remembers names per barcode) ---------- */
+function getProductCache() { try { return JSON.parse(localStorage.getItem('productCache') || '{}'); } catch(e) { return {}; } }
+function saveProductCache(cache) { localStorage.setItem('productCache', JSON.stringify(cache)); }
+function getCachedProduct(barcode) { const c = getProductCache(); return c[barcode] || null; }
+function setCachedProduct(barcode, data) { const c = getProductCache(); c[barcode] = { name: data.name, brand: data.brand || '', image: data.image || '' }; saveProductCache(c); }
+
 /* ---------- Product lookup ---------- */
 const PRODUCT_SOURCES = [
   { name: 'Open Food Facts', base: (c) => c === 'world' ? 'https://world.openfoodfacts.org' : `https://${c}.openfoodfacts.org` },
@@ -471,6 +477,10 @@ const PRODUCT_SOURCES = [
 ];
 
 async function lookupProduct(barcode) {
+  // Check local cache first (remembers user-edited names)
+  const cached = getCachedProduct(barcode);
+  if (cached && cached.name) return { barcode, name: cached.name, brand: cached.brand || '', image: cached.image || '' };
+
   const country = S.offCountry === 'world' ? 'world' : S.offCountry;
   for (const src of PRODUCT_SOURCES) {
     try {
@@ -481,12 +491,14 @@ async function lookupProduct(barcode) {
         const p = data.product;
         const name = p.product_name || p.product_name_en || p.generic_name || p.product_name_fr || '';
         if (name.trim()) {
-          return {
+          const res = {
             barcode,
             name: name.trim(),
             brand: (p.brands || '').split(',')[0].trim(),
             image: p.image_small_url || p.image_front_small_url || p.image_url || p.image_thumb_url || ''
           };
+          setCachedProduct(barcode, res);
+          return res;
         }
       }
     } catch(e) {}
@@ -497,12 +509,14 @@ async function lookupProduct(barcode) {
     const data = await r.json();
     if (data.code === 'OK' && data.items && data.items.length) {
       const it = data.items[0];
-      return {
+      const res = {
         barcode,
         name: (it.title || '').trim() || `Unknown product (${barcode})`,
         brand: (it.brand || '').trim(),
         image: (it.images && it.images[0]) || ''
       };
+      setCachedProduct(barcode, res);
+      return res;
     }
   } catch(e) {}
   return { barcode, name: `Unknown product (${barcode})`, brand: '', image: '' };
@@ -606,6 +620,8 @@ $('btnAdd').addEventListener('click', async () => {
   try {
     const editedName = ($('resName').value || '').trim() || currentProduct.name;
     currentProduct.name = editedName;
+    // Remember this name for next time this barcode is scanned
+    setCachedProduct(currentProduct.barcode, { name: editedName, brand: currentProduct.brand, image: currentProduct.image });
     const itemName = S.qtyInName && qty > 1
       ? `${editedName} x${qty}`
       : editedName;
