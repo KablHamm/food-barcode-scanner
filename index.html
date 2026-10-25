@@ -339,7 +339,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.9';
+const VERSION = '1.6.10';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -622,50 +622,99 @@ $('btnAdd').addEventListener('click', async () => {
     currentProduct.name = editedName;
     // Remember this name for next time this barcode is scanned
     setCachedProduct(currentProduct.barcode, { name: editedName, brand: currentProduct.brand, image: currentProduct.image });
-    const itemName = S.qtyInName && qty > 1
-      ? `${editedName} x${qty}`
-      : editedName;
-    if (S.listType === 'todo') {
-      const service = removing ? 'remove_item' : 'add_item';
-      const body = removing
-        ? { entity_id: S.haEntity, item: itemName }
-        : { entity_id: S.haEntity, item: itemName };
-      const r = await haFetch('/api/services/todo/' + service, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
-    } else {
-      if (removing) {
-        // shopping_list: try remove_item, fall back to complete_item
+
+    if (removing) {
+      // Find the most recent un-removed add entry for this barcode to get the exact stored item name
+      const lastAdd = history.find(h => h.barcode === currentProduct.barcode && h.action === 'add' && !h.removed);
+      const storedQty = lastAdd ? (lastAdd.qty || 1) : qty;
+      const storedItemName = lastAdd && lastAdd.itemName ? lastAdd.itemName : (S.qtyInName && storedQty > 1 ? `${editedName} x${storedQty}` : editedName);
+
+      // Remove the stored item from HA
+      if (S.listType === 'todo') {
+        const r = await haFetch('/api/services/todo/remove_item', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entity_id: S.haEntity, item: storedItemName })
+        });
+        if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
+      } else {
         let r = await haFetch('/api/services/shopping_list/remove_item', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: itemName })
+          body: JSON.stringify({ name: storedItemName })
         });
         if (!r.ok) {
           r = await haFetch('/api/services/shopping_list/complete_item', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: itemName })
+            body: JSON.stringify({ name: storedItemName })
           });
         }
         if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
-      } else {
-        const r = await haFetch('/api/services/shopping_list/add_item', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: itemName })
-        });
-        if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
       }
+
+      // Mark the add entry as removed
+      if (lastAdd) lastAdd.removed = true;
+
+      // Partial remove: if removing fewer than stored, re-add the remainder
+      const removeQty = Math.min(qty, storedQty);
+      const newQty = storedQty - removeQty;
+      if (newQty > 0) {
+        const newName = S.qtyInName && newQty > 1 ? `${editedName} x${newQty}` : editedName;
+        if (S.listType === 'todo') {
+          const r = await haFetch('/api/services/todo/add_item', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entity_id: S.haEntity, item: newName })
+          });
+          if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
+        } else {
+          const r = await haFetch('/api/services/shopping_list/add_item', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: newName })
+          });
+          if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
+        }
+        // record the new remainder as an add entry
+        history.unshift({ name: editedName, brand: currentProduct.brand, barcode: currentProduct.barcode, qty: newQty, itemName: newName, action: 'add', ts: Date.now(), removed: false });
+      }
+
+      const itemName = storedItemName;
+      // record remove history
+      history.unshift({ name: editedName, brand: currentProduct.brand, barcode: currentProduct.barcode, qty: removeQty, itemName, action: 'remove', ts: Date.now(), removed: true });
+      history = history.slice(0, 500);
+      localStorage.setItem('history', JSON.stringify(history));
+      toast('Removed: ' + itemName, 'ok');
+      vibrate();
+      resumeScanning();
+      return;
+    }
+
+    // Add mode
+    const itemName = S.qtyInName && qty > 1
+      ? `${editedName} x${qty}`
+      : editedName;
+    if (S.listType === 'todo') {
+      const r = await haFetch('/api/services/todo/add_item', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entity_id: S.haEntity, item: itemName })
+      });
+      if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
+    } else {
+      const r = await haFetch('/api/services/shopping_list/add_item', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: itemName })
+      });
+      if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
     }
     // record history
-    history.unshift({ name: currentProduct.name, brand: currentProduct.brand, barcode: currentProduct.barcode, qty, action: removing ? 'remove' : 'add', ts: Date.now() });
+    history.unshift({ name: editedName, brand: currentProduct.brand, barcode: currentProduct.barcode, qty, itemName, action: 'add', ts: Date.now(), removed: false });
     history = history.slice(0, 500);
     localStorage.setItem('history', JSON.stringify(history));
-    toast((removing ? 'Removed: ' : 'Added: ') + itemName, 'ok');
+    toast('Added: ' + itemName, 'ok');
     vibrate();
     resumeScanning();
   } catch(e) {
