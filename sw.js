@@ -23,6 +23,19 @@ self.addEventListener('fetch', e => {
   const url = new URL(req.url);
   // Never cache API calls / barcode lookups / HA
   if (url.pathname.includes('/api/') || url.hostname.includes('openfoodfacts')) return;
+  // Network-first for HTML documents so updates appear immediately
+  if (req.mode === 'navigate' || req.destination === 'document' || url.pathname.endsWith('.html')) {
+    e.respondWith(
+      fetch(req).then(res => {
+        if (res && res.status === 200 && res.type === 'basic') {
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put(req, clone));
+        }
+        return res;
+      }).catch(() => caches.match(req).then(c => c || caches.match('./index.html')))
+    );
+    return;
+  }
   e.respondWith(
     caches.match(req).then(cached => cached || fetch(req).then(res => {
       if (res && res.status === 200 && res.type === 'basic') {
