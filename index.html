@@ -344,7 +344,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.13';
+const VERSION = '1.6.14';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -664,11 +664,10 @@ $('btnAdd').addEventListener('click', async () => {
     setCachedProduct(currentProduct.barcode, { name: editedName, brand: currentProduct.brand, image: currentProduct.image });
 
     if (removing) {
-      // Prefer the active-items tracker (reliable); fall back to history
+      // Prefer the active-items tracker (reliable); fall back to computed name (no stale history)
       const ai = getActiveItem(currentProduct.barcode);
-      const lastAdd = ai ? null : history.find(h => h.barcode === currentProduct.barcode && h.action === 'add' && !h.removed);
-      const storedQty = ai ? ai.qty : (lastAdd ? (lastAdd.qty || 1) : qty);
-      const storedItemName = ai ? ai.itemName : (lastAdd && lastAdd.itemName ? lastAdd.itemName : (S.qtyInName && storedQty > 1 ? `${editedName} x${storedQty}` : editedName));
+      const storedQty = ai ? ai.qty : qty;
+      const storedItemName = ai ? ai.itemName : (S.qtyInName && qty > 1 ? `${editedName} x${qty}` : editedName);
 
       // Remove the stored item from HA
       if (S.listType === 'todo') {
@@ -694,8 +693,8 @@ $('btnAdd').addEventListener('click', async () => {
         if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
       }
 
-      // Mark the add entry as removed
-      if (lastAdd) lastAdd.removed = true;
+      // Mark all history add entries for this barcode as removed
+      history.forEach(h => { if (h.barcode === currentProduct.barcode && h.action === 'add') h.removed = true; });
 
       // Partial remove: if removing fewer than stored, re-add the remainder
       const removeQty = Math.min(qty, storedQty);
@@ -740,9 +739,9 @@ $('btnAdd').addEventListener('click', async () => {
       return;
     }
 
-    // Add mode: if item already exists, increase quantity instead of duplicating
+    // Add mode: if item already exists (per active tracker), increase quantity instead of duplicating
     const aiExisting = getActiveItem(currentProduct.barcode);
-    const existingAdd = aiExisting ? { qty: aiExisting.qty, itemName: aiExisting.itemName } : history.find(h => h.barcode === currentProduct.barcode && h.action === 'add' && !h.removed);
+    const existingAdd = aiExisting ? { qty: aiExisting.qty, itemName: aiExisting.itemName } : null;
     let itemName;
     if (existingAdd) {
       const oldQty = existingAdd.qty || 1;
