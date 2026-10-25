@@ -160,6 +160,7 @@
 <header>
   <h1>🛒 Food Scanner <span id="versionLabel" style="font-size:11px;color:var(--muted);font-weight:400"></span></h1>
   <div class="actions">
+    <button class="icon-btn" id="btnMode" title="Toggle add/remove mode">➕</button>
     <button class="icon-btn" id="btnManual" title="Manual entry">⌨️</button>
     <button class="icon-btn" id="btnHistory" title="History">📋</button>
     <button class="icon-btn" id="btnSettings" title="Settings">⚙️</button>
@@ -337,7 +338,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.1';
+const VERSION = '1.6.2';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -347,6 +348,7 @@ const S = {
   qtyInName: localStorage.getItem('qtyInName') !== 'false',
   vibrate: localStorage.getItem('vibrate') !== 'false',
   beep: localStorage.getItem('beep') !== 'false',
+  mode: localStorage.getItem('mode') || 'add',
 };
 let history = JSON.parse(localStorage.getItem('history') || '[]');
 let scanned = JSON.parse(localStorage.getItem('scanned') || '[]');
@@ -558,43 +560,79 @@ $('qtyPlus').addEventListener('click', () => {
 });
 $('btnSkip').addEventListener('click', resumeScanning);
 
+function updateModeUI() {
+  const btn = $('btnMode');
+  if (S.mode === 'remove') { btn.textContent = '➖'; btn.title = 'Mode: Remove (tap to switch to Add)'; }
+  else { btn.textContent = '➕'; btn.title = 'Mode: Add (tap to switch to Remove)'; }
+  const addBtn = $('btnAdd');
+  if (addBtn) addBtn.textContent = S.mode === 'remove' ? 'Remove from list' : 'Add to list';
+}
+$('btnMode').addEventListener('click', () => {
+  S.mode = (S.mode === 'remove') ? 'add' : 'remove';
+  localStorage.setItem('mode', S.mode);
+  updateModeUI();
+  toast(S.mode === 'remove' ? 'Mode: Remove' : 'Mode: Add', 'ok');
+});
+
 $('btnAdd').addEventListener('click', async () => {
   if (!currentProduct) return;
   const btn = $('btnAdd');
   btn.disabled = true;
-  btn.textContent = 'Adding…';
+  const removing = S.mode === 'remove';
+  btn.textContent = removing ? 'Removing…' : 'Adding…';
   try {
     const itemName = S.qtyInName && qty > 1
       ? `${currentProduct.name} x${qty}`
       : currentProduct.name;
     if (S.listType === 'todo') {
-      const r = await haFetch('/api/services/todo/add_item', {
+      const service = removing ? 'remove_item' : 'add_item';
+      const body = removing
+        ? { entity_id: S.haEntity, item: itemName }
+        : { entity_id: S.haEntity, item: itemName };
+      const r = await haFetch('/api/services/todo/' + service, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entity_id: S.haEntity, item: itemName })
+        body: JSON.stringify(body)
       });
       if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
     } else {
-      const r = await haFetch('/api/services/shopping_list/add_item', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: itemName })
-      });
-      if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
+      if (removing) {
+        // shopping_list: try remove_item, fall back to complete_item
+        let r = await haFetch('/api/services/shopping_list/remove_item', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: itemName })
+        });
+        if (!r.ok) {
+          r = await haFetch('/api/services/shopping_list/complete_item', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: itemName })
+          });
+        }
+        if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
+      } else {
+        const r = await haFetch('/api/services/shopping_list/add_item', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: itemName })
+        });
+        if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
+      }
     }
     // record history
-    history.unshift({ name: currentProduct.name, brand: currentProduct.brand, barcode: currentProduct.barcode, qty, ts: Date.now() });
+    history.unshift({ name: currentProduct.name, brand: currentProduct.brand, barcode: currentProduct.barcode, qty, action: removing ? 'remove' : 'add', ts: Date.now() });
     history = history.slice(0, 500);
     localStorage.setItem('history', JSON.stringify(history));
-    toast(`Added: ${itemName}`, 'ok');
+    toast((removing ? 'Removed: ' : 'Added: ') + itemName, 'ok');
     vibrate();
     resumeScanning();
   } catch(e) {
     console.error(e);
-    toast('Failed to add: ' + e.message, 'err');
+    toast('Failed to ' + (removing ? 'remove' : 'add') + ': ' + e.message, 'err');
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Add to list';
+    updateModeUI();
   }
 });
 
@@ -607,7 +645,7 @@ function renderHistory() {
   el.innerHTML = list.map(h => `
     <div class="history-item">
       <div class="hname">
-        <div class="title">${escapeHtml(h.name)}</div>
+        <div class="title">${h.action === 'remove' ? '➖' : '➕'} ${escapeHtml(h.name)}</div>
         <div class="sub">${escapeHtml(h.brand||'')} · ${h.barcode||''} · ${new Date(h.ts).toLocaleString()}</div>
       </div>
       <span class="hqty">×${h.qty||1}</span>
@@ -768,6 +806,7 @@ window.addEventListener('load', async () => {
   const vl = document.getElementById('versionLabel');
   if (vl) vl.textContent = 'v' + VERSION;
   loadSettingsUI();
+  updateModeUI();
   updateStatusFromSettings();
   await startScanner();
 });
