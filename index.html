@@ -776,6 +776,10 @@ window.addEventListener('beforeunload', () => { stopScanner(); });
 
 // Register service worker for offline/PWA installability
 if ('serviceWorker' in navigator) {
+  // Auto-reload when a new service worker takes over, so updates appear promptly
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    window.location.reload();
+  });
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(err => console.warn('SW reg failed', err));
   });
