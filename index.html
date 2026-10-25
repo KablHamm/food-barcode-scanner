@@ -55,9 +55,7 @@
     border-radius:16px; box-shadow: 0 0 0 9999px rgba(0,0,0,.45);
     position:relative;
   }
-  .scan-box::before, .scan-box::after { content:""; position:absolute; width:24px; height:24px; border-color:#f97316; border-style:solid; }
-  .scan-box::before { top:-3px; left:-3px; border-width:4px 0 0 4px; border-radius:16px 0 0 0; }
-  .scan-box::after { top:-3px; left:-3px; width:24px; height:24px; border-radius:16px; }
+  .scan-box::before { content:""; position:absolute; top:-3px; left:-3px; width:24px; height:24px; border-color:#f97316; border-style:solid; border-width:4px 0 0 4px; border-radius:16px 0 0 0; }
   .scan-line {
     position:absolute; left:8%; right:8%; height:2px; background:#f97316;
     top:10%; animation: scan 2s linear infinite; box-shadow:0 0 12px #f97316;
@@ -368,7 +366,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.17';
+const VERSION = '1.6.18';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
