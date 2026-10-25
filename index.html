@@ -344,7 +344,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.14';
+const VERSION = '1.6.15';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -479,7 +479,18 @@ async function haFetch(path, opts={}) {
 function getProductCache() { try { return JSON.parse(localStorage.getItem('productCache') || '{}'); } catch(e) { return {}; } }
 function saveProductCache(cache) { localStorage.setItem('productCache', JSON.stringify(cache)); }
 function getCachedProduct(barcode) { const c = getProductCache(); return c[barcode] || null; }
-function setCachedProduct(barcode, data) { const c = getProductCache(); c[barcode] = { name: data.name, brand: data.brand || '', image: data.image || '' }; saveProductCache(c); }
+function setCachedProduct(barcode, data) {
+  const c = getProductCache();
+  const existing = c[barcode];
+  const newName = (data.name || '').trim();
+  const isUnknown = !newName || /^Unknown product/i.test(newName);
+  // Never overwrite a known (user-edited/looked-up) name with an unknown/empty one
+  if (existing && existing.name && !/^Unknown product/i.test(existing.name) && isUnknown) {
+    return;
+  }
+  c[barcode] = { name: newName || (existing ? existing.name : `Unknown product (${barcode})`), brand: data.brand || (existing ? existing.brand : ''), image: data.image || (existing ? existing.image : '') };
+  saveProductCache(c);
+}
 
 /* ---------- Active items (tracks current HA list entries per barcode) ---------- */
 function getActiveItems() { try { return JSON.parse(localStorage.getItem('activeItems') || '{}'); } catch(e) { return {}; } }
