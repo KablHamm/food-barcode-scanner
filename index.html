@@ -50,6 +50,13 @@
     position:absolute; inset:0; pointer-events:none;
     display:flex; align-items:center; justify-content:center;
   }
+  .list-badge {
+    position:absolute; left:50%; transform:translateX(-50%);
+    top: max(10px, calc(50% - min(36vw, 160px) - 46px));
+    background: rgba(0,0,0,.6); border:1px solid #f97316; color:#fff;
+    padding:6px 14px; border-radius:999px; font-size:14px; font-weight:600;
+    white-space:nowrap; max-width:82%; overflow:hidden; text-overflow:ellipsis;
+  }
   .scan-box {
     width: 72vw; max-width:320px; aspect-ratio:1; border:3px solid #f97316;
     border-radius:16px; box-shadow: 0 0 0 9999px rgba(0,0,0,.45);
@@ -174,6 +181,7 @@
 <main>
   <div id="reader"></div>
   <div class="scan-overlay">
+    <div class="list-badge" id="activeListLabel">List 1</div>
     <div class="scan-box"><div class="scan-line"></div></div>
   </div>
 </main>
@@ -238,6 +246,15 @@
       <label>List 2 todo entity ID (optional)</label>
       <input id="haEntity2" placeholder="todo.groceries" />
       <div class="hint">Leave empty to use only one list. Switch lists with the button next to the status bar.</div>
+    </div>
+    <div class="field">
+      <label>List 1 display name</label>
+      <input id="listName1" placeholder="Shopping" />
+      <div class="hint">Shown above the scanner and on the switch button.</div>
+    </div>
+    <div class="field">
+      <label>List 2 display name</label>
+      <input id="listName2" placeholder="Groceries" />
     </div>
     <div class="field">
       <label>Open Food Facts country</label>
@@ -365,7 +382,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.19';
+const VERSION = '1.6.20';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -373,6 +390,8 @@ const S = {
   haEntity: localStorage.getItem('haEntity') || 'todo.shopping_list',
   haEntity2: localStorage.getItem('haEntity2') || '',
   activeList: localStorage.getItem('activeList') || '1',
+  listName1: localStorage.getItem('listName1') || '',
+  listName2: localStorage.getItem('listName2') || '',
   offCountry: localStorage.getItem('offCountry') || 'world',
   qtyInName: localStorage.getItem('qtyInName') !== 'false',
   vibrate: localStorage.getItem('vibrate') !== 'false',
@@ -434,6 +453,8 @@ function loadSettingsUI() {
   $('listType').value = S.listType;
   $('haEntity').value = S.haEntity;
   $('haEntity2').value = S.haEntity2;
+  $('listName1').value = S.listName1;
+  $('listName2').value = S.listName2;
   $('offCountry').value = S.offCountry;
   $('ghToken').value = S.ghToken;
   $('ghRepo').value = S.ghRepo;
@@ -492,6 +513,8 @@ $('btnSaveSettings').addEventListener('click', () => {
   S.listType = $('listType').value;
   S.haEntity = $('haEntity').value.trim() || 'todo.shopping_list';
   S.haEntity2 = $('haEntity2').value.trim();
+  S.listName1 = $('listName1').value.trim();
+  S.listName2 = $('listName2').value.trim();
   if (S.activeList === '2' && !S.haEntity2) S.activeList = '1';
   S.offCountry = $('offCountry').value;
   S.ghToken = $('ghToken').value.trim();
@@ -796,17 +819,24 @@ function updateModeUI() {
 function currentEntity() {
   return (S.activeList === '2' && S.haEntity2) ? S.haEntity2 : S.haEntity;
 }
+function listEntity(n) { return n === '2' ? S.haEntity2 : S.haEntity; }
+function listName(n) {
+  const custom = n === '2' ? S.listName2 : S.listName1;
+  return custom || ('List ' + n);
+}
 function listLabel(n) {
-  const e = n === '2' ? S.haEntity2 : S.haEntity;
-  if (!e) return 'List ' + n;
-  const short = e.split('.').slice(1).join('.') || e;
-  return 'List ' + n + ': ' + short;
+  const e = listEntity(n);
+  return listName(n) + (e ? ' (' + e + ')' : '');
 }
 function updateListUI() {
+  const active = S.activeList === '2' ? '2' : '1';
   const btn = $('btnList');
-  if (!btn) return;
-  btn.textContent = 'List ' + S.activeList + (S.haEntity2 ? ' ⇄' : '');
-  btn.title = listLabel(S.activeList) + (S.haEntity2 ? ' — tap to switch' : '');
+  if (btn) {
+    btn.textContent = listName(active) + (S.haEntity2 ? ' ⇄' : '');
+    btn.title = listLabel(active) + (S.haEntity2 ? ' — tap to switch' : '');
+  }
+  const badge = $('activeListLabel');
+  if (badge) badge.textContent = listName(active);
 }
 $('btnList').addEventListener('click', () => {
   if (!S.haEntity2) { toast('Add a List 2 entity in Settings first', 'err'); return; }
@@ -1006,7 +1036,7 @@ function renderHistory() {
     <div class="history-item">
       <div class="hname">
         <div class="title">${h.action === 'remove' ? '➖' : '➕'} ${escapeHtml(h.name)}</div>
-        <div class="sub">${h.list === '2' ? 'List 2 · ' : ''}${escapeHtml(h.brand||'')} · ${h.barcode||''} · ${new Date(h.ts).toLocaleString()}</div>
+        <div class="sub">${S.haEntity2 ? escapeHtml(listName(h.list || '1')) + ' · ' : ''}${escapeHtml(h.brand||'')} · ${h.barcode||''} · ${new Date(h.ts).toLocaleString()}</div>
       </div>
       <span class="hqty">×${h.qty||1}</span>
     </div>
