@@ -44,6 +44,8 @@
 
   #reader { flex:1; position:relative; background:#000; overflow:hidden; }
   #reader video { width:100% !important; height:100% !important; object-fit:cover !important; }
+  /* Hide html5-qrcode's default white corner brackets so only our box shows */
+  #reader #qr-shaded-region > div { display: none !important; }
   .scan-overlay {
     position:absolute; inset:0; pointer-events:none;
     display:flex; align-items:center; justify-content:center;
