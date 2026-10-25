@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#0f172a" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+<title>Food Barcode Scanner → Home Assistant</title>
+<style>
+  :root {
+    --bg: #0b1220;
+    --panel: #111a2e;
+    --panel2: #16213a;
+    --accent: #22c55e;
+    --accent2: #3b82f6;
+    --danger: #ef4444;
+    --warn: #f59e0b;
+    --text: #e6edf7;
+    --muted: #8fa3bf;
+    --border: #23314f;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin:0; padding:0; height:100%; background:var(--bg); color:var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; overflow:hidden; }
+  body { display:flex; flex-direction:column; }
+
+  header {
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 12px 16px; background: var(--panel); border-bottom:1px solid var(--border);
+    padding-top: max(12px, env(safe-area-inset-top));
+  }
+  header h1 { font-size:17px; margin:0; font-weight:600; }
+  header .actions { display:flex; gap:8px; }
+  button.icon-btn {
+    background:var(--panel2); border:1px solid var(--border); color:var(--text);
+    width:40px; height:40px; border-radius:10px; font-size:18px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+  }
+  button.icon-btn:active { transform:scale(.96); }
+
+  main { flex:1; position:relative; overflow:hidden; display:flex; flex-direction:column; }
+
+  #reader { flex:1; position:relative; background:#000; overflow:hidden; }
+  #reader video { width:100% !important; height:100% !important; object-fit:cover !important; }
+  .scan-overlay {
+    position:absolute; inset:0; pointer-events:none;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .scan-box {
+    width: 72vw; max-width:320px; aspect-ratio:1; border:3px solid var(--accent);
+    border-radius:16px; box-shadow: 0 0 0 9999px rgba(0,0,0,.45);
+    position:relative;
+  }
+  .scan-box::before, .scan-box::after { content:""; position:absolute; width:24px; height:24px; border-color:var(--accent); border-style:solid; }
+  .scan-box::before { top:-3px; left:-3px; border-width:4px 0 0 4px; border-radius:16px 0 0 0; }
+  .scan-line {
+    position:absolute; left:8%; right:8%; height:2px; background:var(--accent);
+    top:10%; animation: scan 2s linear infinite; box-shadow:0 0 12px var(--accent);
+  }
+  @keyframes scan { 0%{top:10%} 50%{top:90%} 100%{top:10%} }
+
+  .status-bar {
+    padding: 8px 16px; background: var(--panel); border-top:1px solid var(--border);
+    font-size:13px; color:var(--muted); display:flex; align-items:center; gap:8px;
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+  .status-bar .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); }
+  .status-bar .dot.ok { background:var(--accent); }
+  .status-bar .dot.err { background:var(--danger); }
+
+  /* Result card */
+  .card-overlay {
+    position:absolute; inset:0; background:rgba(0,0,0,.6); display:none;
+    align-items:flex-end; justify-content:center; z-index:20;
+  }
+  .card-overlay.show { display:flex; }
+  .result-card {
+    background:var(--panel); width:100%; max-width:520px; border-radius:20px 20px 0 0;
+    padding: 20px; padding-bottom: max(20px, env(safe-area-inset-bottom));
+    animation: slideup .25s ease;
+  }
+  @keyframes slideup { from{transform:translateY(100%)} to{transform:translateY(0)} }
+  .result-card .row { display:flex; gap:14px; }
+  .result-card img { width:80px; height:80px; object-fit:contain; background:#fff; border-radius:10px; }
+  .result-card .info { flex:1; min-width:0; }
+  .result-card .name { font-size:18px; font-weight:600; margin:0 0 4px; }
+  .result-card .brand { color:var(--muted); font-size:14px; margin:0 0 6px; }
+  .result-card .barcode { font-family:monospace; font-size:12px; color:var(--muted); }
+  .qty-row { display:flex; align-items:center; gap:12px; margin:16px 0; }
+  .qty-row button { width:44px; height:44px; border-radius:10px; border:1px solid var(--border); background:var(--panel2); color:var(--text); font-size:22px; cursor:pointer; }
+  .qty-row .qty { font-size:22px; font-weight:600; min-width:40px; text-align:center; }
+  .actions-row { display:flex; gap:10px; }
+  .btn { flex:1; padding:14px; border:none; border-radius:12px; font-size:16px; font-weight:600; cursor:pointer; }
+  .btn.primary { background:var(--accent); color:#052e16; }
+  .btn.secondary { background:var(--panel2); color:var(--text); border:1px solid var(--border); }
+  .btn:active { transform:scale(.98); }
+  .btn:disabled { opacity:.5; pointer-events:none; }
+
+  /* Panels (settings / history / manual) */
+  .panel-overlay {
+    position:absolute; inset:0; background:rgba(0,0,0,.6); display:none; z-index:30;
+    align-items:center; justify-content:center;
+  }
+  .panel-overlay.show { display:flex; }
+  .panel {
+    background:var(--panel); width:92%; max-width:460px; max-height:88vh; overflow:auto;
+    border-radius:16px; padding:20px;
+  }
+  .panel h2 { margin:0 0 16px; font-size:18px; }
+  .field { margin-bottom:14px; }
+  .field label { display:block; font-size:13px; color:var(--muted); margin-bottom:6px; }
+  .field input, .field select {
+    width:100%; padding:12px; border-radius:10px; border:1px solid var(--border);
+    background:var(--panel2); color:var(--text); font-size:15px;
+  }
+  .field .hint { font-size:12px; color:var(--muted); margin-top:4px; }
+  .panel-actions { display:flex; gap:10px; margin-top:16px; }
+
+  .history-item {
+    display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--border);
+  }
+  .history-item .hname { flex:1; min-width:0; }
+  .history-item .hname .title { font-size:14px; }
+  .history-item .hname .sub { font-size:12px; color:var(--muted); }
+  .history-item .hqty { background:var(--panel2); padding:2px 8px; border-radius:6px; font-size:12px; }
+  .empty { color:var(--muted); text-align:center; padding:24px; font-size:14px; }
+
+  .toast {
+    position:absolute; top:16px; left:50%; transform:translateX(-50%) translateY(-120%);
+    background:var(--panel2); border:1px solid var(--border); padding:10px 16px;
+    border-radius:10px; font-size:14px; z-index:50; transition:transform .25s;
+    max-width:90%;
+  }
+  .toast.show { transform:translateX(-50%) translateY(0); }
+  .toast.ok { border-color:var(--accent); }
+  .toast.err { border-color:var(--danger); }
+
+  .manual-row { display:flex; gap:8px; }
+  .manual-row input { flex:1; }
+
+  .toggle-row { display:flex; align-items:center; justify-content:space-between; padding:8px 0; }
+  .switch { width:44px; height:24px; background:var(--panel2); border-radius:12px; position:relative; cursor:pointer; border:1px solid var(--border); }
+  .switch.on { background:var(--accent); }
+  .switch::after { content:""; position:absolute; top:2px; left:2px; width:18px; height:18px; background:#fff; border-radius:50%; transition:left .2s; }
+  .switch.on::after { left:22px; }
+
+  .list-tabs { display:flex; gap:6px; margin-bottom:12px; }
+  .tab { flex:1; padding:8px; border-radius:8px; background:var(--panel2); border:1px solid var(--border); color:var(--muted); cursor:pointer; font-size:13px; text-align:center; }
+  .tab.active { background:var(--accent); color:#052e16; border-color:var(--accent); }
+
+  .small { font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛒 Food Scanner</h1>
+  <div class="actions">
+    <button class="icon-btn" id="btnManual" title="Manual entry">⌨️</button>
+    <button class="icon-btn" id="btnHistory" title="History">📋</button>
+    <button class="icon-btn" id="btnSettings" title="Settings">⚙️</button>
+  </div>
+</header>
+
+<main>
+  <div id="reader"></div>
+  <div class="scan-overlay">
+    <div class="scan-box"><div class="scan-line"></div></div>
+  </div>
+</main>
+
+<div class="status-bar">
+  <span class="dot" id="statusDot"></span>
+  <span id="statusText">Starting camera…</span>
+</div>
+
+<!-- Result card -->
+<div class="card-overlay" id="cardOverlay">
+  <div class="result-card">
+    <div class="row">
+      <img id="resImg" src="" alt="" onerror="this.style.display='none'" />
+      <div class="info">
+        <p class="name" id="resName">—</p>
+        <p class="brand" id="resBrand"></p>
+        <p class="barcode" id="resBarcode"></p>
+      </div>
+    </div>
+    <div class="qty-row">
+      <button id="qtyMinus">−</button>
+      <div class="qty" id="qtyVal">1</div>
+      <button id="qtyPlus">+</button>
+      <span class="small" style="margin-left:auto">Quantity</span>
+    </div>
+    <div class="actions-row">
+      <button class="btn secondary" id="btnSkip">Skip</button>
+      <button class="btn primary" id="btnAdd">Add to list</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settings panel -->
+<div class="panel-overlay" id="settingsOverlay">
+  <div class="panel">
+    <h2>Settings</h2>
+    <div class="field">
+      <label>Home Assistant URL</label>
+      <input id="haUrl" placeholder="http://homeassistant.local:8123" />
+      <div class="hint">No trailing slash. Must be reachable from this phone.</div>
+    </div>
+    <div class="field">
+      <label>Long-Lived Access Token</label>
+      <input id="haToken" type="password" placeholder="eyJ…" />
+      <div class="hint">Profile → Security → Long-Lived Access Tokens in HA.</div>
+    </div>
+    <div class="field">
+      <label>List type</label>
+      <select id="listType">
+        <option value="todo">Todo entity (recommended)</option>
+        <option value="shopping_list">Shopping list integration</option>
+      </select>
+    </div>
+    <div class="field" id="entityField">
+      <label>Todo entity ID</label>
+      <input id="haEntity" placeholder="todo.shopping_list" />
+      <div class="hint">Find in Developer Tools → States (todo.*).</div>
+    </div>
+    <div class="field">
+      <label>Open Food Facts country</label>
+      <select id="offCountry">
+        <option value="world">World (default)</option>
+        <option value="us">United States</option>
+        <option value="uk">United Kingdom</option>
+        <option value="fr">France</option>
+        <option value="de">Germany</option>
+        <option value="es">Spain</option>
+        <option value="it">Italy</option>
+        <option value="au">Australia</option>
+        <option value="ca">Canada</option>
+      </select>
+    </div>
+    <div class="toggle-row">
+      <span>Add quantity to item name</span>
+      <div class="switch on" id="qtyInName"></div>
+    </div>
+    <div class="toggle-row">
+      <span>Vibrate on scan</span>
+      <div class="switch on" id="vibrate"></div>
+    </div>
+    <div class="toggle-row">
+      <span>Beep on scan</span>
+      <div class="switch on" id="beep"></div>
+    </div>
+    <div class="panel-actions">
+      <button class="btn secondary" id="btnTest">Test connection</button>
+      <button class="btn primary" id="btnSaveSettings">Save</button>
+    </div>
+    <p class="small" style="margin-top:12px">
+      CORS: Home Assistant must allow this origin. Add to configuration.yaml under <code>http:</code>:<br>
+      <code>cors_allowed_origins: ["*"]</code> (or your host) then restart HA.
+    </p>
+  </div>
+</div>
+
+<!-- History panel -->
+<div class="panel-overlay" id="historyOverlay">
+  <div class="panel">
+    <h2>History</h2>
+    <div class="list-tabs">
+      <div class="tab active" data-tab="added">Added</div>
+      <div class="tab" data-tab="scanned">Scanned</div>
+    </div>
+    <div id="historyList"></div>
+    <div class="panel-actions">
+      <button class="btn secondary" id="btnClearHistory">Clear</button>
+      <button class="btn primary" id="btnCloseHistory">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Manual entry panel -->
+<div class="panel-overlay" id="manualOverlay">
+  <div class="panel">
+    <h2>Manual entry</h2>
+    <div class="field">
+      <label>Barcode</label>
+      <div class="manual-row">
+        <input id="manualBarcode" inputmode="numeric" placeholder="e.g. 3017620422003" />
+        <button class="btn primary" id="btnLookupManual" style="flex:0 0 auto; padding:12px 16px;">Lookup</button>
+      </div>
+    </div>
+    <div id="manualResult"></div>
+    <div class="panel-actions">
+      <button class="btn secondary" id="btnCloseManual">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+/* ---------- State ---------- */
+const S = {
+  haUrl: localStorage.getItem('haUrl') || '',
+  haToken: localStorage.getItem('haToken') || '',
+  listType: localStorage.getItem('listType') || 'todo',
+  haEntity: localStorage.getItem('haEntity') || 'todo.shopping_list',
+  offCountry: localStorage.getItem('offCountry') || 'world',
+  qtyInName: localStorage.getItem('qtyInName') !== 'false',
+  vibrate: localStorage.getItem('vibrate') !== 'false',
+  beep: localStorage.getItem('beep') !== 'false',
+};
+let history = JSON.parse(localStorage.getItem('history') || '[]');
+let scanned = JSON.parse(localStorage.getItem('scanned') || '[]');
+
+let html5QrCode = null;
+let scanning = false;
+let currentProduct = null;
+let qty = 1;
+let scanCooldown = false;
+let lastBarcode = null;
+let lastScanTime = 0;
+
+const $ = id => document.getElementById(id);
+
+/* ---------- Audio beep ---------- */
+let audioCtx = null;
+function playBeep() {
+  if (!S.beep) return;
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.connect(g); g.connect(audioCtx.destination);
+    o.frequency.value = 880; g.gain.value = 0.15;
+    o.start(); o.stop(audioCtx.currentTime + 0.12);
+  } catch(e){}
+}
+
+function vibrate() { if (S.vibrate && navigator.vibrate) navigator.vibrate(120); }
+
+/* ---------- Toast ---------- */
+let toastTimer;
+function toast(msg, type='') {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + type;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.className = 'toast', 2600);
+}
+
+/* ---------- Status ---------- */
+function setStatus(text, state='') {
+  $('statusText').textContent = text;
+  const d = $('statusDot');
+  d.className = 'dot ' + (state==='ok'?'ok':state==='err'?'err':'');
+}
+
+/* ---------- Settings UI ---------- */
+function loadSettingsUI() {
+  $('haUrl').value = S.haUrl;
+  $('haToken').value = S.haToken;
+  $('listType').value = S.listType;
+  $('haEntity').value = S.haEntity;
+  $('offCountry').value = S.offCountry;
+  setSwitch('qtyInName', S.qtyInName);
+  setSwitch('vibrate', S.vibrate);
+  setSwitch('beep', S.beep);
+  toggleEntityField();
+}
+function setSwitch(id, on) {
+  $(id).classList.toggle('on', on);
+}
+function toggleEntityField() {
+  $('entityField').style.display = $('listType').value === 'todo' ? '' : 'none';
+}
+$('listType').addEventListener('change', toggleEntityField);
+['qtyInName','vibrate','beep'].forEach(id => {
+  $(id).addEventListener('click', () => setSwitch(id, !$(id).classList.contains('on')));
+});
+
+$('btnSettings').addEventListener('click', () => {
+  loadSettingsUI();
+  $('settingsOverlay').classList.add('show');
+});
+$('settingsOverlay').addEventListener('click', e => {
+  if (e.target === $('settingsOverlay')) $('settingsOverlay').classList.remove('show');
+});
+
+$('btnSaveSettings').addEventListener('click', () => {
+  S.haUrl = $('haUrl').value.trim().replace(/\/$/, '');
+  S.haToken = $('haToken').value.trim();
+  S.listType = $('listType').value;
+  S.haEntity = $('haEntity').value.trim() || 'todo.shopping_list';
+  S.offCountry = $('offCountry').value;
+  S.qtyInName = $('qtyInName').classList.contains('on');
+  S.vibrate = $('vibrate').classList.contains('on');
+  S.beep = $('beep').classList.contains('on');
+  Object.keys(S).forEach(k => localStorage.setItem(k, S[k]));
+  $('settingsOverlay').classList.remove('show');
+  toast('Settings saved', 'ok');
+  updateStatusFromSettings();
+});
+
+$('btnTest').addEventListener('click', async () => {
+  try {
+    const r = await haFetch('/api/', { method:'GET' });
+    if (r.ok) toast('Connected to Home Assistant ✓', 'ok');
+    else toast('Connection failed: ' + r.status, 'err');
+  } catch(e) { toast('Connection failed: ' + e.message, 'err'); }
+});
+
+function updateStatusFromSettings() {
+  if (!S.haUrl || !S.haToken) setStatus('Configure Home Assistant in settings', 'err');
+  else setStatus('Ready — point camera at a barcode', 'ok');
+}
+
+/* ---------- HA fetch ---------- */
+async function haFetch(path, opts={}) {
+  const url = S.haUrl + path;
+  const headers = { 'Authorization': 'Bearer ' + S.haToken, ...(opts.headers||{}) };
+  return fetch(url, { ...opts, headers });
+}
+
+/* ---------- Product lookup ---------- */
+async function lookupProduct(barcode) {
+  const country = S.offCountry === 'world' ? 'world' : S.offCountry;
+  const base = country === 'world'
+    ? 'https://world.openfoodfacts.org'
+    : `https://${country}.openfoodfacts.org`;
+  try {
+    const r = await fetch(`${base}/api/v0/product/${barcode}.json`);
+    const data = await r.json();
+    if (data.status === 1 && data.product) {
+      const p = data.product;
+      const name = p.product_name || p.product_name_en || p.generic_name || `Unknown product`;
+      return {
+        barcode,
+        name: name.trim(),
+        brand: (p.brands || '').split(',')[0].trim(),
+        image: p.image_small_url || p.image_front_small_url || p.image_url || ''
+      };
+    }
+  } catch(e) {}
+  return { barcode, name: `Unknown product (${barcode})`, brand: '', image: '' };
+}
+
+/* ---------- Camera / scanning ---------- */
+async function startScanner() {
+  if (scanning) return;
+  try {
+    html5QrCode = new Html5Qrcode('reader');
+    const cameras = await Html5Qrcode.getCameras();
+    if (!cameras || cameras.length === 0) {
+      setStatus('No camera found', 'err');
+      return;
+    }
+    // prefer back camera
+    let cam = cameras.find(c => /back|rear|environment/i.test(c.label)) || cameras[cameras.length-1];
+    const config = { fps: 12, qrbox: { width: 260, height: 160 }, aspectRatio: 1.0, disableFlip: false };
+    await html5QrCode.start(cam.id, config, onScanSuccess, () => {});
+    scanning = true;
+    setStatus('Scanning… point at barcode', 'ok');
+  } catch(e) {
+    console.error(e);
+    setStatus('Camera error: ' + (e.message || e), 'err');
+    toast('Camera access denied or unavailable', 'err');
+  }
+}
+
+async function stopScanner() {
+  if (html5QrCode && scanning) {
+    try { await html5QrCode.stop(); } catch(e){}
+    scanning = false;
+  }
+}
+
+async function onScanSuccess(decodedText) {
+  if (scanCooldown) return;
+  const now = Date.now();
+  if (decodedText === lastBarcode && now - lastScanTime < 2500) return;
+  lastBarcode = decodedText;
+  lastScanTime = now;
+  scanCooldown = true;
+  playBeep();
+  vibrate();
+  try { await html5QrCode.pause(true); } catch(e){}
+
+  currentProduct = await lookupProduct(decodedText);
+  // record scanned
+  scanned.unshift({ ...currentProduct, ts: Date.now() });
+  scanned = scanned.slice(0, 200);
+  localStorage.setItem('scanned', JSON.stringify(scanned));
+
+  qty = 1;
+  $('qtyVal').textContent = '1';
+  $('resName').textContent = currentProduct.name;
+  $('resBrand').textContent = currentProduct.brand || '';
+  $('resBarcode').textContent = currentProduct.barcode;
+  const img = $('resImg');
+  if (currentProduct.image) { img.src = currentProduct.image; img.style.display = ''; }
+  else { img.style.display = 'none'; }
+  $('cardOverlay').classList.add('show');
+}
+
+function resumeScanning() {
+  scanCooldown = false;
+  $('cardOverlay').classList.remove('show');
+  currentProduct = null;
+  if (html5QrCode) {
+    try { html5QrCode.resume(); } catch(e){}
+  }
+}
+
+$('qtyMinus').addEventListener('click', () => {
+  if (qty > 1) { qty--; $('qtyVal').textContent = qty; }
+});
+$('qtyPlus').addEventListener('click', () => {
+  if (qty < 99) { qty++; $('qtyVal').textContent = qty; }
+});
+$('btnSkip').addEventListener('click', resumeScanning);
+
+$('btnAdd').addEventListener('click', async () => {
+  if (!currentProduct) return;
+  const btn = $('btnAdd');
+  btn.disabled = true;
+  btn.textContent = 'Adding…';
+  try {
+    const itemName = S.qtyInName && qty > 1
+      ? `${currentProduct.name} x${qty}`
+      : currentProduct.name;
+    if (S.listType === 'todo') {
+      const r = await haFetch('/api/services/todo/add_item', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entity_id: S.haEntity, item: itemName })
+      });
+      if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
+    } else {
+      const r = await haFetch('/api/services/shopping_list/add_item', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: itemName })
+      });
+      if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
+    }
+    // record history
+    history.unshift({ name: currentProduct.name, brand: currentProduct.brand, barcode: currentProduct.barcode, qty, ts: Date.now() });
+    history = history.slice(0, 500);
+    localStorage.setItem('history', JSON.stringify(history));
+    toast(`Added: ${itemName}`, 'ok');
+    vibrate();
+    resumeScanning();
+  } catch(e) {
+    console.error(e);
+    toast('Failed to add: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Add to list';
+  }
+});
+
+/* ---------- History ---------- */
+let historyTab = 'added';
+function renderHistory() {
+  const list = historyTab === 'added' ? history : scanned;
+  const el = $('historyList');
+  if (!list.length) { el.innerHTML = '<div class="empty">Nothing here yet.</div>'; return; }
+  el.innerHTML = list.map(h => `
+    <div class="history-item">
+      <div class="hname">
+        <div class="title">${escapeHtml(h.name)}</div>
+        <div class="sub">${escapeHtml(h.brand||'')} · ${h.barcode||''} · ${new Date(h.ts).toLocaleString()}</div>
+      </div>
+      <span class="hqty">×${h.qty||1}</span>
+    </div>
+  `).join('');
+}
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+$('btnHistory').addEventListener('click', () => {
+  renderHistory();
+  $('historyOverlay').classList.add('show');
+});
+$('historyOverlay').addEventListener('click', e => {
+  if (e.target === $('historyOverlay')) $('historyOverlay').classList.remove('show');
+});
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    historyTab = t.dataset.tab;
+    renderHistory();
+  });
+});
+$('btnClearHistory').addEventListener('click', () => {
+  if (historyTab === 'added') { history = []; localStorage.setItem('history','[]'); }
+  else { scanned = []; localStorage.setItem('scanned','[]'); }
+  renderHistory();
+  toast('Cleared', 'ok');
+});
+$('btnCloseHistory').addEventListener('click', () => $('historyOverlay').classList.remove('show'));
+
+/* ---------- Manual entry ---------- */
+$('btnManual').addEventListener('click', () => {
+  $('manualOverlay').classList.add('show');
+  setTimeout(() => $('manualBarcode').focus(), 100);
+});
+$('manualOverlay').addEventListener('click', e => {
+  if (e.target === $('manualOverlay')) $('manualOverlay').classList.remove('show');
+});
+$('btnCloseManual').addEventListener('click', () => $('manualOverlay').classList.remove('show'));
+
+$('btnLookupManual').addEventListener('click', async () => {
+  const bc = $('manualBarcode').value.trim();
+  if (!bc) return;
+  const r = await lookupProduct(bc);
+  currentProduct = r;
+  qty = 1; $('qtyVal').textContent = '1';
+  $('resName').textContent = r.name;
+  $('resBrand').textContent = r.brand || '';
+  $('resBarcode').textContent = r.barcode;
+  const img = $('resImg');
+  if (r.image) { img.src = r.image; img.style.display = ''; }
+  else { img.style.display = 'none'; }
+  $('manualOverlay').classList.remove('show');
+  $('cardOverlay').classList.add('show');
+});
+
+/* ---------- Init ---------- */
+window.addEventListener('load', async () => {
+  loadSettingsUI();
+  updateStatusFromSettings();
+  await startScanner();
+});
+
+window.addEventListener('beforeunload', () => { stopScanner(); });
+
+// Register service worker for offline/PWA installability
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(err => console.warn('SW reg failed', err));
+  });
+}
+
+// handle visibility changes (resume camera)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && !scanning && !scanCooldown) {
+    startScanner();
+  }
+});
+</script>
+</body>
+</html>
