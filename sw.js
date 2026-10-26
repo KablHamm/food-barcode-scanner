@@ -1,4 +1,4 @@
-const CACHE = 'foodscan-v37';
+const CACHE = 'foodscan-v38';
 const ASSETS = [
   './',
   './index.html',
