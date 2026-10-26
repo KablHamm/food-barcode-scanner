@@ -358,6 +358,10 @@
         <button class="btn secondary" id="btnSetPassword" style="flex:1">Set password</button>
         <button class="btn secondary" id="btnRemovePassword" style="flex:1">Remove</button>
       </div>
+      <div class="toggle-row" id="bioRow" style="display:none">
+        <span>Biometric unlock<br /><span class="small">Face ID / fingerprint for Settings</span></span>
+        <div class="switch" id="bioSwitch"></div>
+      </div>
       <div class="hint">Asked each time you open Settings. Stored only on this phone as a hash. No recovery — forgetting it means resetting app data.</div>
     </div>
     <div class="field">
@@ -459,6 +463,7 @@
     <div class="lock-icon">🔒</div>
     <h2>Settings locked</h2>
     <p class="small" style="margin:0 0 14px">Enter your password to open Settings.</p>
+    <button class="btn secondary" id="btnBioUnlock" style="display:none;margin-bottom:12px">👤 Use Face ID / fingerprint</button>
     <input type="password" id="lockPassword" placeholder="Password" autocomplete="current-password" />
     <p class="lock-error" id="lockError"></p>
     <button class="btn primary" id="btnUnlock">Unlock</button>
@@ -471,7 +476,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.27';
+const VERSION = '1.6.28';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -553,6 +558,7 @@ function loadSettingsUI() {
   $('newPassword').value = '';
   $('confirmPassword').value = '';
   updateLockUI();
+  updateBioUI();
   toggleEntityField();
 }
 function setSwitch(id, on) {
@@ -1563,6 +1569,65 @@ async function checkPassword(pw) {
 function removeStoredPassword() {
   ['lockSalt', 'lockIter', 'lockHash'].forEach(k => localStorage.removeItem(k));
 }
+
+/* ---------- Biometric unlock (WebAuthn platform authenticator) ---------- */
+function bioSupported() {
+  return !!window.PublicKeyCredential && window.isSecureContext && location.protocol === 'https:';
+}
+function bioEnabled() { return !!localStorage.getItem('bioCredId'); }
+function randomChallenge() { return crypto.getRandomValues(new Uint8Array(32)); }
+function updateBioUI() {
+  const row = $('bioRow');
+  if (row) row.style.display = bioSupported() ? '' : 'none';
+  const sw = $('bioSwitch');
+  if (sw) sw.classList.toggle('on', bioEnabled());
+  const b = $('btnBioUnlock');
+  if (b) b.style.display = (bioSupported() && bioEnabled()) ? '' : 'none';
+}
+async function registerBiometrics() {
+  if (!bioSupported()) throw new Error('Not supported on this device');
+  const cred = await navigator.credentials.create({ publicKey: {
+    challenge: randomChallenge(),
+    rp: { name: 'Barcode Scanner', id: location.hostname },
+    user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'barcode-scanner', displayName: 'Barcode Scanner' },
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+    authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' },
+    timeout: 60000,
+    attestation: 'none'
+  }});
+  if (!cred || !cred.rawId) throw new Error('No credential created');
+  localStorage.setItem('bioCredId', bytesToB64(new Uint8Array(cred.rawId)));
+}
+async function assertBiometrics() {
+  const stored = localStorage.getItem('bioCredId');
+  if (!stored) return false;
+  const assertion = await navigator.credentials.get({ publicKey: {
+    challenge: randomChallenge(),
+    rpId: location.hostname,
+    allowCredentials: [{ id: b64ToBytes(stored), type: 'public-key', transports: ['internal'] }],
+    userVerification: 'required',
+    timeout: 60000
+  }});
+  return !!assertion;
+}
+async function tryBiometricUnlock() {
+  if (!bioEnabled()) return;
+  const btn = $('btnBioUnlock');
+  btn.disabled = true;
+  try {
+    if (await assertBiometrics()) {
+      settingsUnlockFailures = 0;
+      hideSettingsUnlock();
+      openSettingsPanel();
+    } else {
+      $('lockError').textContent = 'Biometric check failed — enter password';
+    }
+  } catch (e) {
+    $('lockError').textContent = 'Biometric unlock cancelled — enter password';
+  } finally {
+    btn.disabled = false;
+  }
+}
 function updateLockUI() {
   const st = $('lockStatus');
   if (st) {
@@ -1577,6 +1642,7 @@ function openSettingsPanel() {
   $('settingsOverlay').classList.add('show');
 }
 function promptSettingsUnlock() {
+  updateBioUI();
   $('lockOverlay').classList.add('show');
   $('lockPassword').value = '';
   $('lockError').textContent = '';
@@ -1619,6 +1685,28 @@ async function tryUnlock() {
 $('btnUnlock').addEventListener('click', tryUnlock);
 $('lockPassword').addEventListener('keydown', e => { if (e.key === 'Enter') tryUnlock(); });
 $('btnCancelUnlock').addEventListener('click', hideSettingsUnlock);
+$('btnBioUnlock').addEventListener('click', tryBiometricUnlock);
+$('bioSwitch').addEventListener('click', async () => {
+  if (bioEnabled()) {
+    if (!confirm('Turn off biometric unlock?')) return;
+    localStorage.removeItem('bioCredId');
+    updateBioUI();
+    toast('Biometric unlock off', 'ok');
+    return;
+  }
+  if (!lockEnabled()) { toast('Set a password first — it is the fallback', 'err'); return; }
+  $('bioSwitch').classList.add('on');
+  try {
+    await registerBiometrics();
+    updateBioUI();
+    toast('Biometric unlock enabled', 'ok');
+  } catch (e) {
+    updateBioUI();
+    const name = e && e.name;
+    const msg = name === 'NotAllowedError' ? 'cancelled' : (e.message || name || 'failed');
+    toast('Could not enable biometrics: ' + msg, 'err');
+  }
+});
 $('btnSetPassword').addEventListener('click', async () => {
   if (!cryptoAvailable()) { toast('Set a password over https, not http', 'err'); return; }
   const pw = $('newPassword').value;
@@ -1643,7 +1731,9 @@ $('btnRemovePassword').addEventListener('click', () => {
   if (!lockEnabled()) { toast('No password set', 'err'); return; }
   if (!confirm('Remove the Settings password?')) return;
   removeStoredPassword();
+  localStorage.removeItem('bioCredId');
   updateLockUI();
+  updateBioUI();
   toast('Password removed', 'ok');
 });
 $('btnForgot').addEventListener('click', () => {
