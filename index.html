@@ -136,6 +136,25 @@
   }
   .field .hint { font-size:12px; color:var(--muted); margin-top:4px; }
   .panel-actions { display:flex; gap:10px; margin-top:16px; }
+  .qr-panel { width:96%; max-width:520px; }
+  .qr-frame { display:flex; justify-content:center; margin:12px 0; }
+  .qr-frame img, .qr-frame canvas { display:block; border-radius:10px; background:#fff; }
+  .qr-link {
+    width:100%; padding:10px; border-radius:10px; border:1px solid var(--border);
+    background:var(--panel2); color:var(--muted); font-size:11px; font-family:monospace;
+  }
+  .qr-warn { font-size:12px; color:#fca5a5; margin-top:8px; }
+  .setup-banner {
+    display:none; align-items:flex-start; gap:10px; margin:10px 16px 0; padding:12px 14px;
+    border:1px solid var(--accent); border-radius:12px;
+    background:rgba(34,197,94,.12); font-size:13px; line-height:1.4;
+  }
+  .setup-banner.show { display:flex; }
+  .setup-banner .sb-text { flex:1; min-width:0; }
+  .setup-banner .sb-close {
+    background:none; border:none; color:var(--muted); font-size:18px;
+    line-height:1; cursor:pointer; padding:0 2px;
+  }
 
   .history-item {
     display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--border);
@@ -181,6 +200,11 @@
     <button class="icon-btn" id="btnSettings" title="Settings">⚙️</button>
   </div>
 </header>
+
+<div class="setup-banner" id="setupBanner">
+  <div class="sb-text" id="setupBannerText">Settings imported.</div>
+  <button class="sb-close" id="btnCloseSetupBanner" title="Dismiss">✕</button>
+</div>
 
 <main>
   <div id="reader"></div>
@@ -292,7 +316,7 @@
         <button class="btn secondary" id="btnScanQr" style="flex:1">📷 Scan QR</button>
         <button class="btn secondary" id="btnGenQr" style="flex:1">Generate QR</button>
       </div>
-      <div class="hint">Scan a QR with your HA URL + token, or generate one from current settings to share with another device.</div>
+      <div class="hint">Scan a setup QR from another phone, or generate one with your full setup to install on a new phone.</div>
     </div>
     <div class="field">
       <label>Reset local data</label>
@@ -370,10 +394,20 @@
 
 <!-- QR generate overlay -->
 <div class="panel-overlay" id="qrGenOverlay">
-  <div class="panel" style="text-align:center">
-    <h2>Your setup QR</h2>
-    <div id="qrOutput" style="display:flex;justify-content:center;margin:12px 0"></div>
-    <p class="small">Scan this with another device's "Scan QR" button to copy your HA URL + token.</p>
+  <div class="panel qr-panel" style="text-align:center">
+    <h2>Install link &amp; setup QR</h2>
+    <div class="qr-frame" id="qrOutput"></div>
+    <input class="qr-link" id="qrLink" readonly />
+    <div class="toggle-row" style="text-align:left">
+      <span>Include GitHub token</span>
+      <div class="switch" id="qrIncludeGh"></div>
+    </div>
+    <p class="small">Scan this with another phone's camera. The app opens with your HA URL, token, both lists, names, country and all toggles already filled in — then choose <strong>Add to Home Screen</strong>.</p>
+    <div class="qr-warn">⚠️ Anyone who scans this gets full access to your Home Assistant token. Keep it private.</div>
+    <div class="panel-actions">
+      <button class="btn secondary" id="btnCopyLink">Copy link</button>
+      <button class="btn secondary" id="btnShareLink">Share</button>
+    </div>
     <div class="panel-actions">
       <button class="btn secondary" id="btnCloseQrGen">Close</button>
     </div>
@@ -386,7 +420,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.24';
+const VERSION = '1.6.25';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -1147,6 +1181,126 @@ $('btnLookupManual').addEventListener('click', async () => {
 let qrScanner = null;
 let qrScanning = false;
 
+/* ---------- Setup sharing (install link + QR) ---------- */
+let generatedSetupLink = '';
+let qrSource = null;
+
+function b64urlEncode(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlDecode(str) {
+  try {
+    let s = String(str).replace(/-/g, '+').replace(/_/g, '/');
+    while (s.length % 4) s += '=';
+    const bin = atob(s);
+    const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch (e) { return ''; }
+}
+function appBaseUrl() {
+  if (location.protocol === 'http:' || location.protocol === 'https:') {
+    return location.origin + location.pathname.replace(/index\.html$/i, '');
+  }
+  return 'https://kablhamm.github.io/food-barcode-scanner/';
+}
+function compactSetup(src, includeGhToken) {
+  const o = {
+    u: src.haUrl, t: src.haToken,
+    e1: src.haEntity, e2: src.haEntity2,
+    n1: src.listName1, n2: src.listName2,
+    lt: src.listType, a: src.activeList,
+    c: src.offCountry,
+    q: !!src.qtyInName, vb: !!src.vibrate, b: !!src.beep,
+    m: src.mode || 'add', gr: src.ghRepo
+  };
+  if (includeGhToken && src.ghToken) o.gt = src.ghToken;
+  Object.keys(o).forEach(k => {
+    if (typeof o[k] === 'string' && o[k] === '') delete o[k];
+  });
+  return o;
+}
+function buildSetupLink(src, includeGhToken) {
+  return appBaseUrl() + '#setup=' + b64urlEncode(JSON.stringify(compactSetup(src, includeGhToken)));
+}
+function normalizeSetup(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const has = k => Object.prototype.hasOwnProperty.call(raw, k);
+  const val = (...keys) => { for (const k of keys) if (has(k) && raw[k] !== null) return raw[k]; return undefined; };
+  const out = {};
+  const set = (target, v) => { if (v !== undefined) out[target] = v; };
+  set('haUrl', val('u', 'url', 'haUrl', 'ha_url'));
+  set('haToken', val('t', 'token', 'haToken', 'ha_token', 'access_token'));
+  set('haEntity', val('e1', 'entity', 'haEntity', 'entity_id'));
+  set('haEntity2', val('e2', 'entity2', 'haEntity2'));
+  set('listName1', val('n1', 'listName1'));
+  set('listName2', val('n2', 'listName2'));
+  set('listType', val('lt', 'listType', 'list_type'));
+  set('activeList', val('a', 'activeList'));
+  set('offCountry', val('c', 'offCountry'));
+  set('qtyInName', val('q', 'qtyInName'));
+  set('vibrate', val('vb', 'vibrate'));
+  set('beep', val('b', 'beep'));
+  set('mode', val('m', 'mode'));
+  set('ghRepo', val('gr', 'ghRepo'));
+  set('ghToken', val('gt', 'ghToken'));
+  return out;
+}
+function applySetup(raw) {
+  const o = normalizeSetup(raw);
+  if (!o || !Object.keys(o).length) return false;
+  if (typeof o.haUrl === 'string') o.haUrl = o.haUrl.trim().replace(/\/+$/, '');
+  if (typeof o.haToken === 'string') o.haToken = o.haToken.trim();
+  ['haEntity', 'haEntity2', 'listName1', 'listName2', 'ghRepo', 'ghToken'].forEach(k => {
+    if (typeof o[k] === 'string') o[k] = o[k].trim();
+  });
+  if (!o.haEntity) delete o.haEntity;
+  Object.assign(S, o);
+  if (S.activeList === '2' && !S.haEntity2) S.activeList = '1';
+  Object.keys(o).forEach(k => localStorage.setItem(k, S[k]));
+  localStorage.setItem('activeList', S.activeList);
+  return true;
+}
+function parseSetupLink(text) {
+  text = (text || '').trim();
+  if (!text) return null;
+  const m = text.match(/[#&?]setup=([^&\s]+)/);
+  if (m) {
+    let raw = '';
+    try { raw = decodeURIComponent(m[1]); } catch (e) { raw = m[1]; }
+    const json = b64urlDecode(raw);
+    if (json) { try { return JSON.parse(json); } catch (e) {} }
+  }
+  if (text.charAt(0) === '{') { try { return JSON.parse(text); } catch (e) {} }
+  return null;
+}
+function setupFromLocation() {
+  const hash = location.hash || '';
+  const search = location.search || '';
+  const m = hash.match(/setup=([^&]+)/) || search.match(/setup=([^&]+)/);
+  if (!m) return false;
+  let raw = '';
+  try { raw = decodeURIComponent(m[1]); } catch (e) { raw = m[1]; }
+  const json = b64urlDecode(raw);
+  if (!json) return false;
+  let data = null;
+  try { data = JSON.parse(json); } catch (e) { return false; }
+  if (!applySetup(data)) return false;
+  try { window.history.replaceState(null, '', location.pathname); } catch (e) {}
+  return true;
+}
+function showSetupBanner() {
+  const b = $('setupBanner');
+  if (!b) return;
+  const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone;
+  $('setupBannerText').innerHTML = standalone
+    ? '✅ <strong>Settings imported.</strong> You are ready to scan.'
+    : '✅ <strong>Settings imported.</strong> To install: open your browser menu (<strong>⋮</strong>) and choose <strong>Add to Home Screen</strong>.';
+  b.classList.add('show');
+}
+
 function parseQrPayload(text) {
   text = (text || '').trim();
   // Try JSON
@@ -1190,6 +1344,18 @@ async function startQrScan() {
     const cameras = await Html5Qrcode.getCameras();
     let cam = cameras.find(c => /back|rear|environment/i.test(c.label)) || cameras[cameras.length-1];
     await qrScanner.start(cam.id, { fps: 12, qrbox: { width: 220, height: 220 } }, (decoded) => {
+      const setup = parseSetupLink(decoded);
+      if (setup) {
+        if (applySetup(setup)) {
+          loadSettingsUI();
+          updateModeUI();
+          updateListUI();
+          updateStatusFromSettings();
+          toast('Settings imported from QR ✓', 'ok');
+          stopQrScan();
+          return;
+        }
+      }
       const parsed = parseQrPayload(decoded);
       if (parsed.url) $('haUrl').value = parsed.url;
       if (parsed.token) $('haToken').value = parsed.token;
@@ -1217,20 +1383,66 @@ async function stopQrScan() {
   await startScanner();
 }
 
-function generateQr() {
-  const url = $('haUrl').value.trim();
-  const token = $('haToken').value.trim();
-  const entity = $('haEntity').value.trim();
-  const listType = $('listType').value;
-  if (!token) { toast('Enter a token first', 'err'); return; }
-  const payload = JSON.stringify({ url, token, entity, listType });
+function readSettingsForm() {
+  return {
+    haUrl: $('haUrl').value.trim().replace(/\/$/, ''),
+    haToken: $('haToken').value.trim(),
+    listType: $('listType').value,
+    haEntity: $('haEntity').value.trim() || 'todo.shopping_list',
+    haEntity2: $('haEntity2').value.trim(),
+    listName1: $('listName1').value.trim(),
+    listName2: $('listName2').value.trim(),
+    offCountry: $('offCountry').value,
+    ghToken: $('ghToken').value.trim(),
+    ghRepo: $('ghRepo').value.trim(),
+    qtyInName: $('qtyInName').classList.contains('on'),
+    vibrate: $('vibrate').classList.contains('on'),
+    beep: $('beep').classList.contains('on'),
+    mode: S.mode,
+    activeList: S.activeList
+  };
+}
+
+function renderSetupQr() {
+  if (!qrSource) return;
+  const includeGh = $('qrIncludeGh').classList.contains('on');
+  generatedSetupLink = buildSetupLink(qrSource, includeGh);
   const out = $('qrOutput');
+  const avail = Math.max(200, Math.min(360, out.clientWidth || 300));
   out.innerHTML = '';
   try {
-    new QRCode(out, { text: payload, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
-    $('qrGenOverlay').classList.add('show');
+    new QRCode(out, {
+      text: generatedSetupLink,
+      width: avail,
+      height: avail,
+      correctLevel: QRCode.CorrectLevel.M,
+      colorDark: '#000000',
+      colorLight: '#ffffff'
+    });
   } catch(e) {
     toast('QR generation failed: ' + e.message, 'err');
+    return;
+  }
+  $('qrLink').value = generatedSetupLink;
+}
+
+function generateQr() {
+  qrSource = readSettingsForm();
+  if (!qrSource.haToken) { toast('Add your Home Assistant token first', 'err'); return; }
+  $('qrIncludeGh').classList.remove('on');
+  $('qrGenOverlay').classList.add('show');
+  renderSetupQr();
+}
+
+async function copySetupLink() {
+  try {
+    await navigator.clipboard.writeText(generatedSetupLink);
+    toast('Install link copied', 'ok');
+  } catch(e) {
+    const inp = $('qrLink');
+    inp.focus(); inp.select();
+    try { document.execCommand('copy'); toast('Install link copied', 'ok'); }
+    catch(e2) { toast('Long-press the link to copy it', 'err'); }
   }
 }
 
@@ -1238,6 +1450,21 @@ $('btnScanQr').addEventListener('click', startQrScan);
 $('btnGenQr').addEventListener('click', generateQr);
 $('btnCloseQr').addEventListener('click', stopQrScan);
 $('btnCloseQrGen').addEventListener('click', () => $('qrGenOverlay').classList.remove('show'));
+$('qrIncludeGh').addEventListener('click', () => {
+  $('qrIncludeGh').classList.toggle('on');
+  renderSetupQr();
+});
+$('btnCopyLink').addEventListener('click', copySetupLink);
+$('btnShareLink').addEventListener('click', async () => {
+  if (navigator.share) {
+    try { await navigator.share({ title: 'Barcode Scanner setup', text: 'Install the barcode scanner with my settings', url: generatedSetupLink }); }
+    catch(e) {}
+  } else {
+    copySetupLink();
+  }
+});
+$('qrLink').addEventListener('focus', e => e.target.select());
+$('btnCloseSetupBanner').addEventListener('click', () => $('setupBanner').classList.remove('show'));
 $('qrOverlay').addEventListener('click', e => { if (e.target === $('qrOverlay')) stopQrScan(); });
 $('qrGenOverlay').addEventListener('click', e => { if (e.target === $('qrGenOverlay')) $('qrGenOverlay').classList.remove('show'); });
 
@@ -1245,6 +1472,7 @@ $('qrGenOverlay').addEventListener('click', e => { if (e.target === $('qrGenOver
 window.addEventListener('load', async () => {
   const vl = document.getElementById('versionLabel');
   if (vl) vl.textContent = 'v' + VERSION;
+  const importedSetup = setupFromLocation();
   loadSettingsUI();
   if (S.activeList === '2' && !S.haEntity2) { S.activeList = '1'; localStorage.setItem('activeList', '1'); }
   migrateActiveItemsScoping();
@@ -1253,6 +1481,7 @@ window.addEventListener('load', async () => {
   updateModeUI();
   updateListUI();
   updateStatusFromSettings();
+  if (importedSetup) showSetupBanner();
   await startScanner();
 });
 
