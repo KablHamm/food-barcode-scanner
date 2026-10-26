@@ -350,16 +350,15 @@
       <div class="hint">Does not affect Home Assistant or your saved product names.</div>
     </div>
     <div class="field">
-      <label>App password</label>
-      <div class="hint" id="lockStatus">No password set.</div>
+      <label>Settings password</label>
+      <div class="hint" id="lockStatus">No password set — anyone can open Settings.</div>
       <input id="newPassword" type="password" placeholder="New password" autocomplete="new-password" style="margin-top:8px" />
       <input id="confirmPassword" type="password" placeholder="Confirm password" autocomplete="new-password" style="margin-top:8px" />
       <div class="manual-row" style="margin-top:8px">
         <button class="btn secondary" id="btnSetPassword" style="flex:1">Set password</button>
         <button class="btn secondary" id="btnRemovePassword" style="flex:1">Remove</button>
       </div>
-      <button class="btn secondary" id="btnLockNow" style="width:100%;margin-top:8px">Lock now</button>
-      <div class="hint">Locks the app when reopened or after 5 minutes in the background. Stored only on this phone as a hash. No recovery — forgetting it means clearing app data.</div>
+      <div class="hint">Asked each time you open Settings. Stored only on this phone as a hash. No recovery — forgetting it means resetting app data.</div>
     </div>
     <div class="field">
       <label>GitHub sync (optional) — persist names in your repo</label>
@@ -454,14 +453,16 @@
 
 <div class="toast" id="toast"></div>
 
-<!-- Lock screen -->
+<!-- Settings lock prompt -->
 <div class="lock-overlay" id="lockOverlay">
   <div class="lock-box" id="lockBox">
     <div class="lock-icon">🔒</div>
-    <h2>Enter password</h2>
+    <h2>Settings locked</h2>
+    <p class="small" style="margin:0 0 14px">Enter your password to open Settings.</p>
     <input type="password" id="lockPassword" placeholder="Password" autocomplete="current-password" />
     <p class="lock-error" id="lockError"></p>
     <button class="btn primary" id="btnUnlock">Unlock</button>
+    <button class="lock-link" id="btnCancelUnlock">Cancel</button>
     <button class="lock-link" id="btnForgot">Forgot password?</button>
   </div>
 </div>
@@ -470,7 +471,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.26';
+const VERSION = '1.6.27';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -568,8 +569,8 @@ $('listType').addEventListener('change', toggleEntityField);
 });
 
 $('btnSettings').addEventListener('click', () => {
-  loadSettingsUI();
-  $('settingsOverlay').classList.add('show');
+  if (lockEnabled()) { promptSettingsUnlock(); return; }
+  openSettingsPanel();
 });
 $('settingsOverlay').addEventListener('click', e => {
   if (e.target === $('settingsOverlay')) $('settingsOverlay').classList.remove('show');
@@ -866,7 +867,6 @@ async function lookupProduct(barcode) {
 
 /* ---------- Camera / scanning ---------- */
 async function startScanner() {
-  if (isLocked()) return;
   if (scanning) return;
   try {
     html5QrCode = new Html5Qrcode('reader');
@@ -1522,13 +1522,10 @@ $('btnCloseSetupBanner').addEventListener('click', () => $('setupBanner').classL
 $('qrOverlay').addEventListener('click', e => { if (e.target === $('qrOverlay')) stopQrScan(); });
 $('qrGenOverlay').addEventListener('click', e => { if (e.target === $('qrGenOverlay')) $('qrGenOverlay').classList.remove('show'); });
 
-/* ---------- App lock ---------- */
-const AUTO_LOCK_MS = 5 * 60 * 1000;
-let lockFailures = 0;
-let hiddenAt = 0;
+/* ---------- Settings password ---------- */
+let settingsUnlockFailures = 0;
 
 function lockEnabled() { return !!localStorage.getItem('lockHash'); }
-function isLocked() { return lockEnabled() && sessionStorage.getItem('appUnlocked') !== '1'; }
 function cryptoAvailable() { return !!(window.crypto && window.crypto.subtle); }
 function bytesToB64(bytes) {
   let s = '';
@@ -1554,7 +1551,6 @@ async function storePassword(pw) {
   localStorage.setItem('lockSalt', saltB64);
   localStorage.setItem('lockIter', String(iterations));
   localStorage.setItem('lockHash', hash);
-  sessionStorage.setItem('appUnlocked', '1');
 }
 async function checkPassword(pw) {
   if (!lockEnabled()) return true;
@@ -1566,36 +1562,30 @@ async function checkPassword(pw) {
 }
 function removeStoredPassword() {
   ['lockSalt', 'lockIter', 'lockHash'].forEach(k => localStorage.removeItem(k));
-  sessionStorage.removeItem('appUnlocked');
 }
 function updateLockUI() {
   const st = $('lockStatus');
   if (st) {
     st.textContent = lockEnabled()
-      ? '🔒 Password is set — locks on reopen and after 5 minutes in the background.'
-      : 'No password set. Anyone with this phone can use the app.';
+      ? '🔒 Settings are password-protected.'
+      : 'No password set — anyone can open Settings.';
   }
   const rm = $('btnRemovePassword'); if (rm) rm.disabled = !lockEnabled();
-  const lk = $('btnLockNow'); if (lk) lk.disabled = !lockEnabled();
 }
-function closeOverlays() {
-  document.querySelectorAll('.panel-overlay.show, .card-overlay.show').forEach(el => el.classList.remove('show'));
+function openSettingsPanel() {
+  loadSettingsUI();
+  $('settingsOverlay').classList.add('show');
 }
-function showLock() {
-  stopScanner();
-  if (qrScanning) {
-    qrScanning = false;
-    if (qrScanner) { try { qrScanner.stop(); } catch(e){} qrScanner = null; }
-  }
-  closeOverlays();
+function promptSettingsUnlock() {
   $('lockOverlay').classList.add('show');
   $('lockPassword').value = '';
   $('lockError').textContent = '';
   setTimeout(() => { try { $('lockPassword').focus(); } catch(e){} }, 120);
 }
-function lockApp() {
-  sessionStorage.removeItem('appUnlocked');
-  showLock();
+function hideSettingsUnlock() {
+  $('lockOverlay').classList.remove('show');
+  $('lockPassword').value = '';
+  $('lockError').textContent = '';
 }
 async function tryUnlock() {
   const pw = $('lockPassword').value;
@@ -1605,15 +1595,11 @@ async function tryUnlock() {
   btn.disabled = true;
   try {
     if (await checkPassword(pw)) {
-      sessionStorage.setItem('appUnlocked', '1');
-      lockFailures = 0;
-      $('lockOverlay').classList.remove('show');
-      $('lockError').textContent = '';
-      $('lockPassword').value = '';
-      toast('Unlocked', 'ok');
-      await startScanner();
+      settingsUnlockFailures = 0;
+      hideSettingsUnlock();
+      openSettingsPanel();
     } else {
-      lockFailures++;
+      settingsUnlockFailures++;
       $('lockError').textContent = 'Wrong password';
       $('lockPassword').value = '';
       $('lockPassword').focus();
@@ -1622,7 +1608,7 @@ async function tryUnlock() {
       void box.offsetWidth;
       box.classList.add('shake');
       // Slow down repeated guesses
-      await new Promise(r => setTimeout(r, Math.min(4000, lockFailures * 500)));
+      await new Promise(r => setTimeout(r, Math.min(4000, settingsUnlockFailures * 500)));
     }
   } catch (e) {
     $('lockError').textContent = 'Could not verify password';
@@ -1632,6 +1618,7 @@ async function tryUnlock() {
 }
 $('btnUnlock').addEventListener('click', tryUnlock);
 $('lockPassword').addEventListener('keydown', e => { if (e.key === 'Enter') tryUnlock(); });
+$('btnCancelUnlock').addEventListener('click', hideSettingsUnlock);
 $('btnSetPassword').addEventListener('click', async () => {
   if (!cryptoAvailable()) { toast('Set a password over https, not http', 'err'); return; }
   const pw = $('newPassword').value;
@@ -1645,7 +1632,7 @@ $('btnSetPassword').addEventListener('click', async () => {
     $('newPassword').value = '';
     $('confirmPassword').value = '';
     updateLockUI();
-    toast('Password set — app locks when reopened', 'ok');
+    toast('Password set — Settings now asks for it', 'ok');
   } catch (e) {
     toast('Could not set password: ' + (e.message || e), 'err');
   } finally {
@@ -1654,15 +1641,10 @@ $('btnSetPassword').addEventListener('click', async () => {
 });
 $('btnRemovePassword').addEventListener('click', () => {
   if (!lockEnabled()) { toast('No password set', 'err'); return; }
-  if (!confirm('Remove the app password?')) return;
+  if (!confirm('Remove the Settings password?')) return;
   removeStoredPassword();
   updateLockUI();
   toast('Password removed', 'ok');
-});
-$('btnLockNow').addEventListener('click', () => {
-  if (!lockEnabled()) { toast('Set a password first', 'err'); return; }
-  lockApp();
-  toast('Locked', 'ok');
 });
 $('btnForgot').addEventListener('click', () => {
   if (!confirm('Erase ALL app data on this phone (settings, tokens, saved product names, history) to remove the password?')) return;
@@ -1684,8 +1666,7 @@ window.addEventListener('load', async () => {
   updateListUI();
   updateStatusFromSettings();
   if (importedSetup) showSetupBanner();
-  if (isLocked()) showLock();
-  else await startScanner();
+  await startScanner();
 });
 
 window.addEventListener('beforeunload', () => { stopScanner(); });
@@ -1703,15 +1684,9 @@ if ('serviceWorker' in navigator) {
 
 // handle visibility changes (resume camera)
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
-  if (isLocked()) return;
-  if (lockEnabled() && hiddenAt && Date.now() - hiddenAt > AUTO_LOCK_MS) {
-    hiddenAt = 0;
-    lockApp();
-    return;
+  if (document.visibilityState === 'visible' && !scanning && !scanCooldown) {
+    startScanner();
   }
-  hiddenAt = 0;
-  if (!scanning && !scanCooldown) startScanner();
 });
 </script>
 </body>
