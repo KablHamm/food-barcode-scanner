@@ -33,5 +33,20 @@
     "name": "Spicy Bean Burgers",
     "brand": "Tesco",
     "image": "https://images.openfoodfacts.org/images/products/505/775/392/7844/front_en.3.200.jpg"
+  },
+  "5014379029758": {
+    "name": "San Miguel Especial",
+    "brand": "San Miguel Especial",
+    "image": "https://images.openfoodfacts.org/images/products/501/437/902/9758/front_en.3.200.jpg"
+  },
+  "03231845": {
+    "name": "Yeast extract",
+    "brand": "Tesco",
+    "image": "https://images.openfoodfacts.org/images/products/000/000/323/1845/front_en.15.200.jpg"
+  },
+  "5000129302677": {
+    "name": "Tomato ketchup",
+    "brand": "co op",
+    "image": "https://images.openfoodfacts.org/images/products/500/012/930/2677/front_en.35.200.jpg"
   }
 }
