@@ -53,5 +53,10 @@
     "name": "Apple juice from concentrate",
     "brand": "The Grower's Harvest",
     "image": "https://images.openfoodfacts.org/images/products/505/775/341/6294/front_en.18.200.jpg"
+  },
+  "5057545619520": {
+    "name": "WHOLEMEAL BREAD",
+    "brand": "TESCO",
+    "image": "https://images.openfoodfacts.org/images/products/505/754/561/9520/front_en.29.200.jpg"
   }
 }
