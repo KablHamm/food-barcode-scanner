@@ -58,5 +58,15 @@
     "name": "WHOLEMEAL BREAD",
     "brand": "TESCO",
     "image": "https://images.openfoodfacts.org/images/products/505/754/561/9520/front_en.29.200.jpg"
+  },
+  "5057545579008": {
+    "name": "White Bread",
+    "brand": "Tesco",
+    "image": "https://images.openfoodfacts.org/images/products/505/754/557/9008/front_en.33.200.jpg"
+  },
+  "5057545828984": {
+    "name": "Orange Juice",
+    "brand": "Tesco",
+    "image": "https://images.openfoodfacts.org/images/products/505/754/582/8984/front_en.5.200.jpg"
   }
 }
