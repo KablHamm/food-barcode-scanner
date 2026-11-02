@@ -487,7 +487,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.29';
+const VERSION = '1.6.30';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -672,7 +672,13 @@ function setCachedProduct(barcode, data) {
   if (existing && existing.name && !/^Unknown product/i.test(existing.name) && isUnknown) {
     return;
   }
-  c[barcode] = { name: newName || (existing ? existing.name : `Unknown product (${barcode})`), brand: data.brand || (existing ? existing.brand : ''), image: data.image || (existing ? existing.image : '') };
+  c[barcode] = {
+    ...(existing || {}),
+    name: newName || (existing ? existing.name : `Unknown product (${barcode})`),
+    brand: data.brand || (existing ? existing.brand : ''),
+    image: data.image || (existing ? existing.image : '')
+  };
+  if (data.custom !== undefined) c[barcode].custom = !!data.custom;
   saveProductCache(c);
 }
 
@@ -754,9 +760,39 @@ async function pullProductCacheFromGitHub() {
 function getActiveItems() { try { return JSON.parse(localStorage.getItem('activeItems') || '{}'); } catch(e) { return {}; } }
 function saveActiveItems(m) { localStorage.setItem('activeItems', JSON.stringify(m)); }
 function activeKey(barcode) { return S.activeList + ':' + barcode; }
-function getActiveItem(barcode) { return getActiveItems()[activeKey(barcode)] || null; }
-function setActiveItem(barcode, data) { const m = getActiveItems(); m[activeKey(barcode)] = { itemName: data.itemName, qty: data.qty }; saveActiveItems(m); }
-function clearActiveItem(barcode) { const m = getActiveItems(); delete m[activeKey(barcode)]; saveActiveItems(m); }
+function getActiveItem(barcode) {
+  const key = activeKey(barcode);
+  const v = getActiveItems()[key];
+  return v ? { key, barcode, itemName: v.itemName, qty: v.qty } : null;
+}
+function setActiveItem(barcode, data) { setActiveItemAt(activeKey(barcode), data); }
+function setActiveItemAt(key, data) { const m = getActiveItems(); m[key] = { itemName: data.itemName, qty: data.qty }; saveActiveItems(m); }
+function clearActiveItem(barcode) { clearActiveItemAt(activeKey(barcode)); }
+function clearActiveItemAt(key) { const m = getActiveItems(); delete m[key]; saveActiveItems(m); }
+
+// Group identical item names across barcodes (e.g. Tesco / Morrisons white bread)
+function itemNameKey(name) {
+  return String(name || '')
+    .replace(/\s+x\d+$/i, '')
+    .toLowerCase()
+    .replace(/[’']/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+function findActiveItemByName(name) {
+  const wanted = itemNameKey(name);
+  if (!wanted) return null;
+  const m = getActiveItems();
+  const prefix = S.activeList + ':';
+  for (const key of Object.keys(m)) {
+    if (key.indexOf(prefix) !== 0) continue;
+    const v = m[key];
+    if (v && itemNameKey(v.itemName) === wanted) {
+      return { key, barcode: key.slice(prefix.length), itemName: v.itemName, qty: v.qty };
+    }
+  }
+  return null;
+}
 
 // Rename legacy (un-scoped) active items to list 1
 function migrateActiveItemsScoping() {
@@ -796,6 +832,76 @@ const PRODUCT_SOURCES = [
   { name: 'Open Beauty Facts', base: () => 'https://world.openbeautyfacts.org' },
 ];
 
+/* Retailer names that OFf often put at the start of product_name ("Tesco White Bread").
+   Remove them so own-brand versions from different shops become the same list item. */
+const STORE_ALIASES = [
+  ['waitrose', 'partners'], ['whole', 'foods', 'market'], ['marks', 'spencer'],
+  ['home', 'bargains'], ['heron', 'foods'], ['poundstretcher'],
+  ['trader', 'joes'], ['food', 'basics'], ['save', 'on', 'foods'],
+  ['no', 'frills'], ['sams', 'club'], ['stop', 'shop'], ['food', 'lion'],
+  ['saveonfoods'], ['sainsburys'], ['sainsbury'], ['tescos'], ['morrisons'], ['asdas'],
+  ['waitrose'], ['ms'], ['bm'], ['b', 'm'], ['h', 'e', 'b'],
+  ['coop'], ['co', 'op'], ['cooperative'], ['co', 'operative'],
+  ['tesco'], ['asda'], ['aldi'], ['lidl'], ['iceland'], ['farmfoods'],
+  ['poundland'], ['spar'], ['nisa'], ['londis'], ['budgens'], ['booths'], ['ocado'],
+  ['walmart'], ['target'], ['kroger'], ['safeway'], ['albertsons'], ['wegmans'],
+  ['publix'], ['costco'], ['meijer'], ['amazon', 'fresh'],
+  ['loblaws'], ['provigo'], ['maxi'], ['superstore'], ['freshco'],
+  ['woolworths'], ['coles'], ['iga'],
+  ['carrefour'], ['auchan'], ['leclerc'], ['intermarche'], ['casino'], ['monoprix'],
+  ['edeka'], ['rewe'], ['kaufland'], ['netto'], ['penny'],
+  ['mercadona'], ['alcampo'], ['eroski'], ['conad'], ['esselunga']
+].sort((a, b) => b.length - a.length);
+
+/* Premium own-brand lines, stripped only after a retailer prefix was removed. */
+const STORE_LINE_ALIASES = [
+  ['taste', 'the', 'difference'], ['specially', 'selected'], ['everyday', 'value'],
+  ['extra', 'special'], ['the', 'best'], ['irresistible'],
+  ['essentials'], ['essential'], ['finest'], ['deluxe'], ['luxury']
+].sort((a, b) => b.length - a.length);
+
+function nameWords(s) {
+  const words = String(s || '').trim().replace(/\s+/g, ' ').split(' ').filter(Boolean);
+  const tokens = [];
+  words.forEach((w, idx) => {
+    const c = w.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!c || c === 'and') return; // "Marks & Spencer" / "Marks and Spencer"
+    tokens.push({ idx, c });
+  });
+  return { words, tokens };
+}
+
+function stripAliasPrefix(name, aliases) {
+  const { words, tokens } = nameWords(name);
+  if (!tokens.length) return null;
+  for (const alias of aliases) {
+    if (tokens.length <= alias.length) continue;
+    let start = 0;
+    if (tokens[0].c === 'the' && alias[0] !== 'the') start = 1;
+    if (tokens.length - start <= alias.length) continue;
+    let ok = true;
+    for (let i = 0; i < alias.length; i++) {
+      const c = tokens[start + i].c;
+      const possessive = i === alias.length - 1 && c === alias[i] + 's';
+      if (c !== alias[i] && !possessive) { ok = false; break; }
+    }
+    if (!ok) continue;
+    const lastWord = tokens[start + alias.length - 1].idx;
+    const rest = words.slice(lastWord + 1).join(' ').replace(/^[\s:;,\-–—]+/, '').trim();
+    if (rest) return rest;
+  }
+  return null;
+}
+
+function stripStorePrefix(name) {
+  const original = String(name || '').trim().replace(/\s+/g, ' ');
+  if (!original) return original;
+  const withoutStore = stripAliasPrefix(original, STORE_ALIASES);
+  if (!withoutStore) return original;
+  const withoutLine = stripAliasPrefix(withoutStore, STORE_LINE_ALIASES);
+  return (withoutLine || withoutStore).trim();
+}
+
 /* A product_name like "63% fat spread with buttermilk" is a description, not a name.
    Treat long lowercase / numeric strings as descriptions so we can fall back to the brand. */
 function looksLikeDescription(s) {
@@ -823,6 +929,7 @@ function pickProductName(p) {
   if (!name || looksLikeDescription(name)) {
     name = brand || candidates.find(c => !looksLikeDescription(c)) || name;
   }
+  name = stripStorePrefix(name);
   return { name, brand };
 }
 
@@ -837,7 +944,16 @@ async function lookupProduct(barcode) {
   const cached = getCachedProduct(barcode);
   // Ignore cached names that are descriptions (they get re-fetched and fixed)
   if (cached && cached.name && !looksLikeDescription(cached.name)) {
-    return { barcode, name: cached.name, brand: cached.brand || '', image: cached.image || '' };
+    let name = cached.name;
+    // Strip shop prefixes from older auto-named entries, but never touch names the user typed
+    if (!cached.custom) {
+      const cleaned = stripStorePrefix(name);
+      if (cleaned && cleaned !== name) {
+        name = cleaned;
+        setCachedProduct(barcode, { ...cached, name });
+      }
+    }
+    return { barcode, name, brand: cached.brand || '', image: cached.image || '' };
   }
 
   const country = S.offCountry === 'world' ? 'world' : S.offCountry;
@@ -870,7 +986,7 @@ async function lookupProduct(barcode) {
       const it = data.items[0];
       const res = {
         barcode,
-        name: (it.title || '').trim() || `Unknown product (${barcode})`,
+        name: stripStorePrefix((it.title || '').trim()) || `Unknown product (${barcode})`,
         brand: (it.brand || '').trim(),
         image: (it.images && it.images[0]) || ''
       };
@@ -1014,16 +1130,28 @@ $('btnAdd').addEventListener('click', async () => {
   const removing = S.mode === 'remove';
   btn.textContent = removing ? 'Removing…' : 'Adding…';
   try {
-    const editedName = ($('resName').value || '').trim() || currentProduct.name;
+    const originalName = currentProduct.name;
+    const typedName = ($('resName').value || '').trim();
+    const editedName = typedName || originalName;
+    const userEdited = !!typedName && typedName !== originalName;
     currentProduct.name = editedName;
-    // Remember this name for next time this barcode is scanned
-    setCachedProduct(currentProduct.barcode, { name: editedName, brand: currentProduct.brand, image: currentProduct.image });
+    // Remember this name for next time this barcode is scanned. User-typed names are
+    // marked custom so store-prefix cleanup never rewrites them.
+    const cachedBefore = getCachedProduct(currentProduct.barcode) || {};
+    setCachedProduct(currentProduct.barcode, {
+      name: editedName,
+      brand: currentProduct.brand,
+      image: currentProduct.image,
+      custom: userEdited || !!cachedBefore.custom
+    });
     // Persist the name to the GitHub repo (if configured) so it survives resets/devices
     if (ghConfigured()) { queuePushProductCache(); }
 
     if (removing) {
-      // Prefer the active-items tracker (reliable); fall back to computed name (no stale history)
-      const ai = getActiveItem(currentProduct.barcode);
+      // Prefer the active-items tracker (reliable); fall back to a same-named item
+      // from another barcode so grouped store variants can be removed too.
+      const ai = getActiveItem(currentProduct.barcode) || findActiveItemByName(editedName);
+      const targetKey = ai ? ai.key : activeKey(currentProduct.barcode);
       const storedQty = ai ? ai.qty : qty;
       const storedItemName = ai ? ai.itemName : (S.qtyInName && qty > 1 ? `${editedName} x${qty}` : editedName);
 
@@ -1051,8 +1179,11 @@ $('btnAdd').addEventListener('click', async () => {
         if (!r.ok) throw new Error('HA ' + r.status + ': ' + await r.text());
       }
 
-      // Mark all history add entries for this barcode/list as removed
-      history.forEach(h => { if (h.barcode === currentProduct.barcode && h.action === 'add' && (h.list || '1') === S.activeList) h.removed = true; });
+      // Mark all history add entries for this item/list as removed
+      history.forEach(h => {
+        if (h.action === 'add' && (h.list || '1') === S.activeList
+            && (h.barcode === currentProduct.barcode || (ai && h.barcode === ai.barcode))) h.removed = true;
+      });
 
       // Partial remove: if removing fewer than stored, re-add the remainder
       const removeQty = Math.min(qty, storedQty);
@@ -1081,8 +1212,10 @@ $('btnAdd').addEventListener('click', async () => {
       // Update active items tracker
       if (newQty > 0) {
         const newName = S.qtyInName && newQty > 1 ? `${editedName} x${newQty}` : editedName;
-        setActiveItem(currentProduct.barcode, { itemName: newName, qty: newQty });
+        setActiveItemAt(targetKey, { itemName: newName, qty: newQty });
+        if (targetKey !== activeKey(currentProduct.barcode)) clearActiveItem(currentProduct.barcode);
       } else {
+        clearActiveItemAt(targetKey);
         clearActiveItem(currentProduct.barcode);
       }
 
@@ -1097,35 +1230,49 @@ $('btnAdd').addEventListener('click', async () => {
       return;
     }
 
-    // Add mode: if item already exists (per active tracker), increase quantity instead of duplicating
-    const aiExisting = getActiveItem(currentProduct.barcode);
-    const existingAdd = aiExisting ? { qty: aiExisting.qty, itemName: aiExisting.itemName } : null;
-    let itemName;
-    if (existingAdd) {
-      const oldQty = existingAdd.qty || 1;
-      const oldItemName = existingAdd.itemName || (S.qtyInName && oldQty > 1 ? `${editedName} x${oldQty}` : editedName);
-      // Remove the old entry from HA (best-effort)
-      try {
-        if (S.listType === 'todo') {
-          await haFetch('/api/services/todo/remove_item', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ entity_id: currentEntity(), item: oldItemName })
-          });
-        } else {
-          await haFetch('/api/services/shopping_list/remove_item', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: oldItemName })
-          });
-        }
-      } catch(e) {}
-      existingAdd.removed = true;
-      // mark history entry removed too (same list only)
-      const histEntry = history.find(h => h.barcode === currentProduct.barcode && h.action === 'add' && !h.removed && (h.list || '1') === S.activeList);
-      if (histEntry) histEntry.removed = true;
+    // Add mode: group by item name across barcodes, so store variants of the same
+    // product (e.g. Tesco / Morrisons white bread) share one list entry.
+    const aiByBarcode = getActiveItem(currentProduct.barcode);
+    const aiByName = findActiveItemByName(editedName);
+    const matches = [];
+    if (aiByBarcode) matches.push(aiByBarcode);
+    if (aiByName && !matches.some(m => m.key === aiByName.key)) matches.push(aiByName);
 
-      const totalQty = oldQty + qty;
+    let itemName;
+    if (matches.length) {
+      let totalQty = qty;
+      const removedNames = new Set();
+      for (const m of matches) {
+        const oldQty = m.qty || 1;
+        const oldItemName = m.itemName || (S.qtyInName && oldQty > 1 ? `${editedName} x${oldQty}` : editedName);
+        if (!removedNames.has(oldItemName)) {
+          removedNames.add(oldItemName);
+          // Remove the old entry from HA (best-effort)
+          try {
+            if (S.listType === 'todo') {
+              await haFetch('/api/services/todo/remove_item', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ entity_id: currentEntity(), item: oldItemName })
+              });
+            } else {
+              await haFetch('/api/services/shopping_list/remove_item', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: oldItemName })
+              });
+            }
+          } catch(e) {}
+        }
+        totalQty += oldQty;
+        // mark matching history entries removed too (same list only)
+        history.forEach(h => {
+          if (h.action === 'add' && !h.removed && (h.list || '1') === S.activeList
+              && (h.barcode === m.barcode || h.barcode === currentProduct.barcode)) h.removed = true;
+        });
+        clearActiveItemAt(m.key);
+      }
+
       itemName = S.qtyInName && totalQty > 1 ? `${editedName} x${totalQty}` : editedName;
       if (S.listType === 'todo') {
         const r = await haFetch('/api/services/todo/add_item', {
