@@ -487,7 +487,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.30';
+const VERSION = '1.6.31';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -902,6 +902,58 @@ function stripStorePrefix(name) {
   return (withoutLine || withoutStore).trim();
 }
 
+/* Strip a normal brand when it is also repeated at the start of the product name,
+   e.g. "Cadbury Dairy Milk" -> "Dairy Milk", "Kellogg's Corn Flakes" -> "Corn Flakes". */
+function brandTokens(brand) {
+  const first = String(brand || '').split(',')[0].trim();
+  const { tokens } = nameWords(first);
+  return tokens.map(t => t.c);
+}
+
+/* A few generic one-word "brands" would destroy otherwise good names
+   ("White Bread" with brand "White"), so never strip those on their own. */
+const GENERIC_BRAND_WORDS = new Set([
+  'white', 'brown', 'whole', 'wholemeal', 'fresh', 'new', 'original', 'classic',
+  'value', 'best', 'light', 'dark', 'pure', 'natural', 'organic', 'green', 'red',
+  'black', 'blue', 'gold', 'golden', 'milk', 'bread', 'water', 'juice', 'butter',
+  'cheese', 'eggs'
+]);
+
+/* If removing the brand leaves only variant wording ("Zero Sugar", "Free"),
+   keep the full name — it would no longer identify the product. */
+const GENERIC_REMAINDER_WORDS = new Set([
+  'free', 'sugar', 'zero', 'diet', 'light', 'lite', 'max', 'original', 'classic',
+  'regular', 'standard', 'traditional', 'authentic', 'real', 'pure', 'natural',
+  'fresh', 'new', 'improved', 'premium', 'finest', 'best', 'ultimate', 'advanced',
+  'professional', 'complete', 'total', 'extra', 'plus', 'special', 'limited',
+  'edition', 'selection', 'choice', 'quality', 'value', 'family', 'large', 'small',
+  'medium', 'mini', 'maxi', 'super', 'ultra', 'mega', 'giant', 'big', 'little',
+  'mild', 'strong', 'rich', 'smooth', 'creamy', 'crispy', 'crunchy', 'tasty',
+  'delicious', 'refreshing', 'energy', 'drink', 'flavour', 'flavor', 'taste',
+  'style', 'type', 'homemade', 'home', 'made', 'no', 'added', 'reduced', 'less',
+  'more', 'vanilla', 'cherry', 'orange', 'lemon', 'lime', 'strawberry',
+  'raspberry', 'mango', 'peach', 'apple', 'grape', 'mint', 'caramel', 'chocolate',
+  'coffee', 'mocha', 'fruit', 'berries', 'cola'
+]);
+
+function isGenericOnlyName(name) {
+  const { tokens } = nameWords(name);
+  return !tokens.length || tokens.every(t => GENERIC_REMAINDER_WORDS.has(t.c));
+}
+
+function stripBrandPrefix(name, brand) {
+  const alias = brandTokens(brand);
+  if (!alias.length || alias.join('').length < 2) return name;
+  if (alias.length === 1 && GENERIC_BRAND_WORDS.has(alias[0])) return name;
+  const stripped = stripAliasPrefix(name, [alias]);
+  if (!stripped || isGenericOnlyName(stripped)) return name;
+  return stripped;
+}
+
+function cleanProductName(name, brand) {
+  return stripBrandPrefix(stripStorePrefix(name), brand);
+}
+
 /* A product_name like "63% fat spread with buttermilk" is a description, not a name.
    Treat long lowercase / numeric strings as descriptions so we can fall back to the brand. */
 function looksLikeDescription(s) {
@@ -929,7 +981,7 @@ function pickProductName(p) {
   if (!name || looksLikeDescription(name)) {
     name = brand || candidates.find(c => !looksLikeDescription(c)) || name;
   }
-  name = stripStorePrefix(name);
+  name = cleanProductName(name, brand);
   return { name, brand };
 }
 
@@ -945,9 +997,9 @@ async function lookupProduct(barcode) {
   // Ignore cached names that are descriptions (they get re-fetched and fixed)
   if (cached && cached.name && !looksLikeDescription(cached.name)) {
     let name = cached.name;
-    // Strip shop prefixes from older auto-named entries, but never touch names the user typed
+    // Strip shop/brand prefixes from older auto-named entries, but never touch names the user typed
     if (!cached.custom) {
-      const cleaned = stripStorePrefix(name);
+      const cleaned = cleanProductName(name, cached.brand);
       if (cleaned && cleaned !== name) {
         name = cleaned;
         setCachedProduct(barcode, { ...cached, name });
@@ -986,7 +1038,7 @@ async function lookupProduct(barcode) {
       const it = data.items[0];
       const res = {
         barcode,
-        name: stripStorePrefix((it.title || '').trim()) || `Unknown product (${barcode})`,
+        name: cleanProductName((it.title || '').trim(), it.brand) || `Unknown product (${barcode})`,
         brand: (it.brand || '').trim(),
         image: (it.images && it.images[0]) || ''
       };
