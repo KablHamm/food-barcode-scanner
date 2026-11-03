@@ -67,11 +67,17 @@
   "5057545828984": {
     "name": "Orange Juice",
     "brand": "Tesco",
-    "image": "https://images.openfoodfacts.org/images/products/505/754/582/8984/front_en.5.200.jpg"
+    "image": "https://images.openfoodfacts.org/images/products/505/754/582/8984/front_en.5.200.jpg",
+    "custom": false
   },
   "4088600165677": {
     "name": "Bread",
     "brand": "Aldi",
     "image": "https://images.openfoodfacts.org/images/products/408/860/016/5677/front_en.18.200.jpg"
+  },
+  "9082340179784": {
+    "name": "Unknown product (9082340179784)",
+    "brand": "",
+    "image": ""
   }
 }
