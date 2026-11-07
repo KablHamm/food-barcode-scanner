@@ -79,5 +79,11 @@
     "name": "Unknown product (9082340179784)",
     "brand": "",
     "image": ""
+  },
+  "5052909467342": {
+    "name": "Dental chews",
+    "brand": "",
+    "image": "",
+    "custom": true
   }
 }
