@@ -116,6 +116,50 @@ Manual entry (⌨️) lets you type a barcode if the camera can't read it.
 - Quantities: by default the quantity is appended to the item name
   (`Milk x2`). Toggle "Add quantity to item name" in settings to disable.
 
+## Wall tablet / Amazon Fire + Fully Kiosk
+The app works in Fully Kiosk Browser on a Fire tablet. Camera access needs a
+**secure (https) page**, so use the GitHub Pages URL rather than an `http://`
+LAN address.
+
+### 1. Put a link on your HA dashboard
+A normal link-out card is best (an embedded iframe cannot use the camera). Add
+to any dashboard:
+
+```yaml
+type: button
+name: Barcode Scanner
+icon: mdi:barcode-scan
+show_state: false
+tap_action:
+  action: url
+  url_path: https://kablhamm.github.io/food-barcode-scanner/?camera=front
+```
+
+`?camera=front` forces the front camera for that device and is saved, so a
+wall-mounted tablet always uses the camera facing the room. Use
+`?camera=back` or omit it to prefer the rear camera.
+
+### 2. Fully Kiosk setup
+1. Install **Fully Kiosk Browser** on the Fire tablet.
+2. Allow the camera at the Android level: Fire OS **Settings → Apps → Fully
+   Kiosk Browser → Permissions → Camera → Allow**.
+3. In Fully Kiosk, open its **Settings → Web Content Settings** and make sure
+   camera/web permissions are allowed (the exact wording varies by version).
+4. Set the **Start URL** to your HA dashboard, then tap the scanner button. The
+   first time, approve the camera prompt. If the prompt never appears, clear
+   Fully's site permissions and reload.
+5. Enable **Keep Screen On** / disable the screensaver in Fully while scanning.
+6. Use Fully's back button/gesture to return to the HA dashboard.
+
+### 3. Camera tips for Fire tablets
+- Most Fire HD front cameras are low resolution and fixed-focus. They work for
+  large, flat barcodes but may struggle with small, curved, or shiny ones. Hold
+  the product 10–20 cm away, fill the orange box, and avoid glare.
+- The app's Settings → **Camera** dropdown also lets you choose Auto / Front /
+  Rear without changing the URL.
+- If the front camera can't focus at all, use the rear camera and present
+  products to it, or use the ⌨️ manual barcode entry.
+
 ## Privacy
 All processing happens in your browser. The only network calls are to
 Open Food Facts (product lookup) and your own Home Assistant instance.
