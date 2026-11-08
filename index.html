@@ -496,7 +496,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.32';
+const VERSION = '1.6.33';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -1083,10 +1083,37 @@ function pickCamera(cameras) {
   return back || cameras[cameras.length - 1];
 }
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* Android/Fire OS can keep the camera busy for a moment after stop(). Starting
+   a new stream too quickly throws NotReadableError ("Could not start video
+   source"), so retry a few times with a growing delay. */
+function isCameraBusyError(e) {
+  const msg = String((e && e.message) || e || '');
+  return /NotReadable|Could not start video source|TrackStart|device in use|in use/i.test(msg);
+}
+
+async function startVideoWithRetry(instance, camId, config, onSuccess, onError, maxAttempts) {
+  const attempts = maxAttempts || 4;
+  let lastErr = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await instance.start(camId, config, onSuccess, onError || (() => {}));
+      return;
+    } catch (e) {
+      lastErr = e;
+      if (!isCameraBusyError(e)) throw e;
+      try { await instance.stop(); } catch (e2) {}
+      try { instance.clear(); } catch (e2) {}
+      await sleep(500 * (i + 1));
+    }
+  }
+  throw lastErr;
+}
+
 async function startScanner() {
   if (scanning) return;
   try {
-    html5QrCode = new Html5Qrcode('reader');
     const cameras = await Html5Qrcode.getCameras();
     if (!cameras || cameras.length === 0) {
       setStatus('No camera found', 'err');
@@ -1094,7 +1121,10 @@ async function startScanner() {
     }
     const cam = pickCamera(cameras);
     const config = { fps: 12, qrbox: { width: 260, height: 160 }, aspectRatio: 1.0, disableFlip: false };
-    await html5QrCode.start(cam.id, config, onScanSuccess, () => {});
+    // Give a previously stopped stream time to release the camera
+    await sleep(250);
+    html5QrCode = new Html5Qrcode('reader');
+    await startVideoWithRetry(html5QrCode, cam.id, config, onScanSuccess, () => {});
     scanning = true;
     const label = S.cameraFacing === 'front' ? 'front camera' : (S.cameraFacing === 'back' ? 'rear camera' : 'camera');
     setStatus('Scanning… point at barcode (' + label + ')', 'ok');
@@ -1106,10 +1136,12 @@ async function startScanner() {
 }
 
 async function stopScanner() {
-  if (html5QrCode && scanning) {
+  if (html5QrCode) {
     try { await html5QrCode.stop(); } catch(e){}
-    scanning = false;
+    try { html5QrCode.clear(); } catch(e){}
+    html5QrCode = null;
   }
+  scanning = false;
 }
 
 async function onScanSuccess(decodedText) {
@@ -1482,6 +1514,8 @@ $('btnLookupManual').addEventListener('click', async () => {
 /* ---------- QR scan to fill settings ---------- */
 let qrScanner = null;
 let qrScanning = false;
+let qrStarting = false;
+let qrSession = 0;
 
 /* ---------- Setup sharing (install link + QR) ---------- */
 let generatedSetupLink = '';
@@ -1648,15 +1682,21 @@ function parseQrPayload(text) {
 }
 
 async function startQrScan() {
-  // fully stop main scanner so the camera is released
-  if (scanning) { try { await html5QrCode.stop(); } catch(e){} scanning = false; }
   $('qrOverlay').classList.add('show');
-  if (qrScanning) return;
+  if (qrScanning || qrStarting) return;
+  qrStarting = true;
+  const session = ++qrSession;
   try {
-    qrScanner = new Html5Qrcode('qrReader');
+    // Fully release the main scanner; Fire OS needs a moment before the
+    // camera can be opened again, otherwise it throws NotReadableError.
+    await stopScanner();
+    await sleep(450);
     const cameras = await Html5Qrcode.getCameras();
-    let cam = cameras.find(c => /back|rear|environment/i.test(c.label)) || cameras[cameras.length-1];
-    await qrScanner.start(cam.id, { fps: 12, qrbox: { width: 220, height: 220 } }, (decoded) => {
+    if (!cameras || cameras.length === 0) throw new Error('No camera found');
+    const cam = pickCamera(cameras);
+    const qrConfig = { fps: 12, qrbox: { width: 220, height: 220 } };
+    qrScanner = new Html5Qrcode('qrReader');
+    await startVideoWithRetry(qrScanner, cam.id, qrConfig, (decoded) => {
       const setup = parseSetupLink(decoded);
       if (setup) {
         if (applySetup(setup)) {
@@ -1677,22 +1717,53 @@ async function startQrScan() {
       toggleEntityField();
       toast('QR scanned — review & Save', 'ok');
       stopQrScan();
-    }, () => {});
+    }, () => {}, 5);
+    // Overlay was closed while the camera was still starting
+    if (session !== qrSession) {
+      try { await qrScanner.stop(); } catch(e){}
+      try { qrScanner.clear(); } catch(e){}
+      qrScanner = null;
+      return;
+    }
     qrScanning = true;
   } catch(e) {
-    toast('Camera error: ' + (e.message || e), 'err');
-    stopQrScan();
+    if (session === qrSession) {
+      qrStarting = false;
+      toast('Camera error: ' + (e.message || e), 'err');
+      await stopQrScan();
+    }
+  } finally {
+    qrStarting = false;
   }
 }
 
 async function stopQrScan() {
+  qrSession++;
   qrScanning = false;
+  // If a start is still in flight, let it settle so we don't fight over the camera
+  for (let i = 0; i < 50 && qrStarting; i++) await sleep(100);
   if (qrScanner) {
     try { await qrScanner.stop(); } catch(e){}
+    try { qrScanner.clear(); } catch(e){}
     qrScanner = null;
   }
   $('qrOverlay').classList.remove('show');
-  // restart main scanner
+  // Let the QR stream release before the main scanner reopens the camera
+  await sleep(350);
+  await startScanner();
+}
+
+async function stopQrScan() {
+  qrScanning = false;
+  qrStarting = false;
+  if (qrScanner) {
+    try { await qrScanner.stop(); } catch(e){}
+    try { qrScanner.clear(); } catch(e){}
+    qrScanner = null;
+  }
+  $('qrOverlay').classList.remove('show');
+  // Let the QR stream release before the main scanner reopens the camera
+  await sleep(350);
   await startScanner();
 }
 
