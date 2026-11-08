@@ -335,6 +335,15 @@
         <option value="ca">Canada</option>
       </select>
     </div>
+    <div class="field">
+      <label>Camera</label>
+      <select id="cameraFacing">
+        <option value="auto">Auto (rear if available)</option>
+        <option value="front">Front camera</option>
+        <option value="back">Rear camera</option>
+      </select>
+      <div class="hint">Use <strong>Front</strong> for a wall-mounted tablet. You can also force it from the link: <code>?camera=front</code>.</div>
+    </div>
     <div class="toggle-row">
       <span>Add quantity to item name</span>
       <div class="switch on" id="qtyInName"></div>
@@ -487,7 +496,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.31';
+const VERSION = '1.6.32';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -498,6 +507,7 @@ const S = {
   listName1: localStorage.getItem('listName1') || '',
   listName2: localStorage.getItem('listName2') || '',
   offCountry: localStorage.getItem('offCountry') || 'world',
+  cameraFacing: localStorage.getItem('cameraFacing') || 'auto',
   qtyInName: localStorage.getItem('qtyInName') !== 'false',
   vibrate: localStorage.getItem('vibrate') !== 'false',
   beep: localStorage.getItem('beep') !== 'false',
@@ -561,6 +571,7 @@ function loadSettingsUI() {
   $('listName1').value = S.listName1;
   $('listName2').value = S.listName2;
   $('offCountry').value = S.offCountry;
+  $('cameraFacing').value = S.cameraFacing || 'auto';
   $('ghToken').value = S.ghToken;
   $('ghRepo').value = S.ghRepo;
   setSwitch('qtyInName', S.qtyInName);
@@ -618,6 +629,7 @@ $('btnResetData').addEventListener('click', () => {
   toast('Local data cleared (names kept)', 'ok');
 });
 $('btnSaveSettings').addEventListener('click', () => {
+  const prevCamera = S.cameraFacing;
   S.haUrl = $('haUrl').value.trim().replace(/\/$/, '');
   S.haToken = $('haToken').value.trim();
   S.listType = $('listType').value;
@@ -627,6 +639,7 @@ $('btnSaveSettings').addEventListener('click', () => {
   S.listName2 = $('listName2').value.trim();
   if (S.activeList === '2' && !S.haEntity2) S.activeList = '1';
   S.offCountry = $('offCountry').value;
+  S.cameraFacing = $('cameraFacing').value;
   S.ghToken = $('ghToken').value.trim();
   S.ghRepo = $('ghRepo').value.trim();
   S.qtyInName = $('qtyInName').classList.contains('on');
@@ -637,6 +650,10 @@ $('btnSaveSettings').addEventListener('click', () => {
   updateListUI();
   toast('Settings saved', 'ok');
   updateStatusFromSettings();
+  // Camera choice changed -> restart the video stream
+  if (prevCamera !== S.cameraFacing) {
+    (async () => { await stopScanner(); await startScanner(); })();
+  }
 });
 
 $('btnTest').addEventListener('click', async () => {
@@ -1052,6 +1069,20 @@ async function lookupProduct(barcode) {
 }
 
 /* ---------- Camera / scanning ---------- */
+function isFrontCamera(c) { return /front|user|face|selfie/i.test(c.label || ''); }
+function isBackCamera(c) { return /back|rear|environment|world/i.test(c.label || ''); }
+
+function pickCamera(cameras) {
+  if (!cameras || !cameras.length) return null;
+  const front = cameras.find(isFrontCamera);
+  const back = cameras.find(isBackCamera);
+  const pref = S.cameraFacing || 'auto';
+  if (pref === 'front') return front || cameras[0];
+  if (pref === 'back') return back || cameras[cameras.length - 1];
+  // Auto: rear camera if there is one, otherwise whatever is available
+  return back || cameras[cameras.length - 1];
+}
+
 async function startScanner() {
   if (scanning) return;
   try {
@@ -1061,12 +1092,12 @@ async function startScanner() {
       setStatus('No camera found', 'err');
       return;
     }
-    // prefer back camera
-    let cam = cameras.find(c => /back|rear|environment/i.test(c.label)) || cameras[cameras.length-1];
+    const cam = pickCamera(cameras);
     const config = { fps: 12, qrbox: { width: 260, height: 160 }, aspectRatio: 1.0, disableFlip: false };
     await html5QrCode.start(cam.id, config, onScanSuccess, () => {});
     scanning = true;
-    setStatus('Scanning… point at barcode', 'ok');
+    const label = S.cameraFacing === 'front' ? 'front camera' : (S.cameraFacing === 'back' ? 'rear camera' : 'camera');
+    setStatus('Scanning… point at barcode (' + label + ')', 'ok');
   } catch(e) {
     console.error(e);
     setStatus('Camera error: ' + (e.message || e), 'err');
@@ -1562,6 +1593,17 @@ function setupFromLocation() {
   try { window.history.replaceState(null, '', location.pathname); } catch (e) {}
   return true;
 }
+/* Allow a kiosk/dashboard link to force a camera, e.g. ?camera=front */
+function cameraFromUrl() {
+  const text = (location.search || '') + '&' + (location.hash || '');
+  const m = text.match(/[?&#]camera=(front|back|auto)/i);
+  if (!m) return;
+  const v = m[1].toLowerCase();
+  if (S.cameraFacing === v) return;
+  S.cameraFacing = v;
+  localStorage.setItem('cameraFacing', v);
+}
+
 function showSetupBanner() {
   const b = $('setupBanner');
   if (!b) return;
@@ -1958,6 +2000,7 @@ window.addEventListener('load', async () => {
   const vl = document.getElementById('versionLabel');
   if (vl) vl.textContent = 'v' + VERSION;
   const importedSetup = setupFromLocation();
+  cameraFromUrl();
   loadSettingsUI();
   if (S.activeList === '2' && !S.haEntity2) { S.activeList = '1'; localStorage.setItem('activeList', '1'); }
   migrateActiveItemsScoping();
