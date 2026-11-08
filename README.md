@@ -159,6 +159,11 @@ wall-mounted tablet always uses the camera facing the room. Use
   Rear without changing the URL.
 - If the front camera can't focus at all, use the rear camera and present
   products to it, or use the ⌨️ manual barcode entry.
+- **“Camera error … NotReadableError: Could not start video source”** usually
+  means another app/stream still holds the camera. The app now retries and
+  waits for the previous stream to close; if it still happens, check that Fully
+  Kiosk's own **Motion Detection / camera** feature is not using the front
+  camera, close other camera apps, and reload the page.
 
 ## Privacy
 All processing happens in your browser. The only network calls are to
