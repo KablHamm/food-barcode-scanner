@@ -357,12 +357,16 @@
       <div class="switch on" id="beep"></div>
     </div>
     <div class="field">
-      <label>Quick setup via QR code</label>
+      <label>Quick setup</label>
       <div class="manual-row">
         <button class="btn secondary" id="btnScanQr" style="flex:1">📷 Scan QR</button>
         <button class="btn secondary" id="btnGenQr" style="flex:1">Generate QR</button>
       </div>
-      <div class="hint">Scan a setup QR from another phone, or generate one with your full setup to install on a new phone.</div>
+      <div class="manual-row" style="margin-top:8px">
+        <input id="setupLinkInput" placeholder="Paste setup link or token" autocomplete="off" autocapitalize="off" spellcheck="false" style="flex:1;min-width:0" />
+        <button class="btn primary" id="btnApplyLink" style="flex:0 0 auto;padding:12px 16px">Apply</button>
+      </div>
+      <div class="hint">Scan a setup QR, paste the install link, or paste a token. Settings are imported when you tap Apply.</div>
     </div>
     <div class="field">
       <label>Reset local data</label>
@@ -496,7 +500,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 /* ---------- State ---------- */
-const VERSION = '1.6.33';
+const VERSION = '1.6.34';
 const S = {
   haUrl: localStorage.getItem('haUrl') || '',
   haToken: localStorage.getItem('haToken') || '',
@@ -1681,6 +1685,47 @@ function parseQrPayload(text) {
   return { url: '', token: text, entity: '', listType: '' };
 }
 
+/* Apply a pasted setup link, JSON payload, URL with ?token=, or bare token. */
+function applySetupText(text) {
+  const raw = (text || '').trim();
+  if (!raw) return { ok: false, error: 'Paste a setup link or token first' };
+
+  // 1) Full setup link or JSON (same format as the setup QR)
+  const setup = parseSetupLink(raw);
+  if (setup) {
+    if (!applySetup(setup)) return { ok: false, error: 'Could not read that setup link' };
+    loadSettingsUI();
+    updateModeUI();
+    updateListUI();
+    updateStatusFromSettings();
+    return { ok: true, imported: true };
+  }
+  if (/setup=/.test(raw)) return { ok: false, error: 'That setup link looks incomplete' };
+
+  // 2) URL with ?token=…, key=value pairs, or a bare token
+  const parsed = parseQrPayload(raw);
+  const isUrl = /^https?:\/\//i.test(raw);
+  const hasTokenParam = /[?&](token|access_token)=/i.test(raw) || /token\s*=/i.test(raw);
+  if (parsed.token && (!isUrl || hasTokenParam)) {
+    if (parsed.url) $('haUrl').value = parsed.url;
+    $('haToken').value = parsed.token;
+    if (parsed.entity) $('haEntity').value = parsed.entity;
+    if (parsed.listType) $('listType').value = parsed.listType;
+    toggleEntityField();
+    return { ok: true, imported: false };
+  }
+
+  return { ok: false, error: 'That does not look like a setup link or token' };
+}
+
+function doApplySetupLink() {
+  const input = $('setupLinkInput');
+  const res = applySetupText(input.value);
+  if (!res.ok) { toast(res.error, 'err'); return; }
+  input.value = '';
+  toast(res.imported ? 'Settings imported from link ✓' : 'Details filled in — tap Save', 'ok');
+}
+
 async function startQrScan() {
   $('qrOverlay').classList.add('show');
   if (qrScanning || qrStarting) return;
@@ -1832,6 +1877,12 @@ async function copySetupLink() {
 
 $('btnScanQr').addEventListener('click', startQrScan);
 $('btnGenQr').addEventListener('click', generateQr);
+$('btnApplyLink').addEventListener('click', doApplySetupLink);
+$('setupLinkInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); doApplySetupLink(); }
+});
+// Applying right after a paste saves a tap on tablets
+$('setupLinkInput').addEventListener('paste', () => setTimeout(doApplySetupLink, 50));
 $('btnCloseQr').addEventListener('click', stopQrScan);
 $('btnCloseQrGen').addEventListener('click', () => $('qrGenOverlay').classList.remove('show'));
 $('qrIncludeGh').addEventListener('click', () => {
