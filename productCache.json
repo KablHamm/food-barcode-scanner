@@ -71,9 +71,10 @@
     "custom": false
   },
   "4088600165677": {
-    "name": "Bread",
+    "name": "White bread",
     "brand": "Aldi",
-    "image": "https://images.openfoodfacts.org/images/products/408/860/016/5677/front_en.18.200.jpg"
+    "image": "https://images.openfoodfacts.org/images/products/408/860/016/5677/front_en.18.200.jpg",
+    "custom": true
   },
   "9082340179784": {
     "name": "Unknown product (9082340179784)",
