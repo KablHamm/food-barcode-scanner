@@ -71,7 +71,7 @@
     "custom": false
   },
   "4088600165677": {
-    "name": "White bread",
+    "name": "White Bread",
     "brand": "Aldi",
     "image": "https://images.openfoodfacts.org/images/products/408/860/016/5677/front_en.18.200.jpg",
     "custom": true
@@ -83,6 +83,12 @@
   },
   "5052909467342": {
     "name": "Dental chews",
+    "brand": "",
+    "image": "",
+    "custom": true
+  },
+  "018444217977": {
+    "name": "WHITE BREAD",
     "brand": "",
     "image": "",
     "custom": true
