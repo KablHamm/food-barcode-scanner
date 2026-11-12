@@ -122,5 +122,23 @@
     "brand": "Mission",
     "image": "https://images.openfoodfacts.org/images/products/503/603/440/6186/front_en.60.200.jpg",
     "custom": true
+  },
+  "5057753921668": {
+    "name": "Crumpets",
+    "brand": "TESCO",
+    "image": "https://images.openfoodfacts.org/images/products/505/775/392/1668/front_en.3.200.jpg",
+    "custom": true
+  },
+  "5057545917152": {
+    "name": "Semi Skimmed Dairy Drink",
+    "brand": "Tesco",
+    "image": "https://images.openfoodfacts.org/images/products/505/754/591/7152/front_en.29.200.jpg",
+    "custom": false
+  },
+  "5059001017291": {
+    "name": "Dishwasher Tablets",
+    "brand": "Reckitt",
+    "image": "https://images.openproductsfacts.org/images/products/505/900/101/7291/front_en.3.200.jpg",
+    "custom": true
   }
 }
