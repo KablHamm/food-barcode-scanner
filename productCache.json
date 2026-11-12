@@ -98,5 +98,17 @@
     "brand": "",
     "image": "",
     "custom": true
+  },
+  "7004785117390": {
+    "name": "Bleach",
+    "brand": "",
+    "image": "",
+    "custom": true
+  },
+  "5054775467501": {
+    "name": "Salted Spreadable",
+    "brand": "Tesco",
+    "image": "https://images.openfoodfacts.org/images/products/505/477/546/7501/front_en.22.200.jpg",
+    "custom": false
   }
 }
