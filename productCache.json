@@ -140,5 +140,11 @@
     "brand": "Reckitt",
     "image": "https://images.openproductsfacts.org/images/products/505/900/101/7291/front_en.3.200.jpg",
     "custom": true
+  },
+  "5057545986745": {
+    "name": "Crunchy Peanut Butter",
+    "brand": "T. E. Stockwell",
+    "image": "https://images.openfoodfacts.org/images/products/505/754/598/6745/front_en.9.200.jpg",
+    "custom": false
   }
 }
