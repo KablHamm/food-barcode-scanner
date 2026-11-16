@@ -42,7 +42,8 @@
   "03231845": {
     "name": "Yeast extract",
     "brand": "Tesco",
-    "image": "https://images.openfoodfacts.org/images/products/000/000/323/1845/front_en.15.200.jpg"
+    "image": "https://images.openfoodfacts.org/images/products/000/000/323/1845/front_en.15.200.jpg",
+    "custom": false
   },
   "5000129302677": {
     "name": "Tomato ketchup",
